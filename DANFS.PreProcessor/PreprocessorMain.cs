@@ -19,6 +19,10 @@ namespace DANFS.PreProcessor
 
         public void Process()
         {
+            MakeLocationDictionary();
+            return;
+
+
             var pathToMainDANFSDatabase = @"C:\Users\Batgar\Documents\danfs.sqlite3";
             var connection = new SQLiteConnection(string.Format("Data Source={0};Version=3", pathToMainDANFSDatabase));
             connection.Open();
@@ -136,6 +140,44 @@ namespace DANFS.PreProcessor
             }
 
             Console.WriteLine("Total Ships: {0} -- Missing Registries: {1} - Total Dates Logged: {2}", totalShipCount, missingShipRegistries, totalDates);
+
+           
+
+        }
+
+        private void MakeLocationDictionary()
+        {
+            List<string> uniqueLocations = new List<string>();
+
+            int shipCount = 0;
+
+            //Now we will produce a location dictionary from all locations, and dump the JSON.
+            foreach (var file in Directory.GetFiles(@"C:\Users\Batgar\Documents\Ships", "*.xml"))
+            {
+                var doc = XDocument.Load(file);
+
+                //TODO: Only do this for now to get the master location list, skip anything in an italics node due to ship name formatting (i.e. New Jersey - Battleship)
+                var locations = doc.Root.Descendants("LOCATION").Where(e => e.Parent.Name != "i" && !uniqueLocations.Contains(e.Value)).Select(e => e.Value).Distinct();
+
+                uniqueLocations.AddRange(locations);
+
+
+                /*var shipID = Path.GetFileNameWithoutExtension(file);
+
+                foreach (var location in locations)
+                {
+                    var closestPreviousDateElement = location.ElementsBeforeSelf("date")?.FirstOrDefault();
+                    var closestNextDateElement = location.ElementsAfterSelf("date")?.FirstOrDefault();
+
+                    //We have a location, a ship ID, and possible associated dates.
+
+
+                }*/
+
+                shipCount++;
+            }
+
+            Console.WriteLine("There are {0} unique locations across {1} ships", uniqueLocations.Count, shipCount);
         }
 
         int totalDates = 0;
@@ -187,34 +229,68 @@ namespace DANFS.PreProcessor
                     //TODO: Search through the destination element and aggregate any LOCATION tags that are siblings.
                     //Close, but no cigar. Need to make sure that outside text nodes with "," are aggregated, as well
                     //any text node between LOCATION nodes are honored... Kind of hard to do....
-                    /*List<XElement> locationElementsToRemove = new List<XElement>();
-                    XElement chainStart = null;
-                    foreach (var possibleLocationElement in destinationElement.Elements())
+                    List<XNode> locationElementsToRemove = new List<XNode>();
+
+                    var locationElements = destinationElement.Elements("LOCATION").ToArray();
+
+                    for(int locationElementIndex = 0; locationElementIndex < locationElements.Length; locationElementIndex++)
                     {
-                        if (possibleLocationElement.Name == "LOCATION" && chainStart == null)
+                        //We are only looking to repair the following scenario:
+                        /*
+                        
+                        <LOCATION>Ditchly</LOCATION>
+                        ,
+                        <LOCATION>Va</LOCATION>
+
+                         */
+                        var possibleLocationElement = locationElements[locationElementIndex];
                         {
-                            chainStart = possibleLocationElement;
-                        }
-                        else if (possibleLocationElement.Name == "LOCATION" && chainStart != null)
-                        {
-                            locationElementsToRemove.Add(possibleLocationElement);
-                            chainStart.Value += " " + possibleLocationElement.Value;
-                            
-                        }                        
-                        else
-                        {
-                            chainStart = null;
+                            //Check the next sibling nodes, if they are a text node and another LOCATION element, then aggregate the text node and LOCATION element together,
+                            //and remove the text node + extra location element from the DOM.
+
+                            //Next 2 nodes:
+
+                            if (possibleLocationElement.NodesAfterSelf() != null && possibleLocationElement.NodesAfterSelf().Count() >= 2)
+                            {
+                                var textNode = possibleLocationElement.NodesAfterSelf().First() as XText;
+                                if (textNode != null)
+                                {
+                                    var otherLocationElement = textNode.NodesAfterSelf().First() as XElement;
+
+                                    if (textNode != null && otherLocationElement != null && otherLocationElement.Name == "LOCATION")
+                                    {
+                                        //Do not aggregate the locations if they are separated by a ;, or by a text node with anything other than
+                                        //Punctuation in it.
+                                        if (textNode.Value.Trim().Where(c => !char.IsPunctuation(c) || c == ';').Count() == 0)
+                                        {
+                                            possibleLocationElement.Value += textNode.Value + otherLocationElement.Value;
+
+                                            Console.WriteLine("Aggregated Locations in {0}: {1}", masterShipID, possibleLocationElement.Value);
+
+                                            //Skip the next location element...
+                                            locationElementIndex++;
+
+                                            //Eradicate the text node and the element.
+                                            textNode.Remove();
+                                            otherLocationElement.Remove();
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
+                       
+                    
 
-                    if (locationElementsToRemove.Count != 0)
+                    /*if (locationElementsToRemove.Count != 0)
                     {
                         foreach (var locationElementToRemove in locationElementsToRemove)
                         {
                             locationElementToRemove.Remove();
                         }
                     }
-                    locationElementsToRemove.Clear();*/
+                    locationElementsToRemove.Clear();
+                    */
 
                     //TODO: Eliminate any LOCATION / PERSON / ORGANIZATION tags that are the same as the ship name.
                 }
