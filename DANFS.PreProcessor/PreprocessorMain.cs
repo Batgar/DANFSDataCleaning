@@ -19,8 +19,8 @@ namespace DANFS.PreProcessor
 
         public void Process()
         {
-            MakeLocationDictionary();
-            return;
+            //MakeLocationDictionary();
+            //return;
 
 
             var pathToMainDANFSDatabase = @"C:\Users\Batgar\Documents\danfs.sqlite3";
@@ -134,6 +134,8 @@ namespace DANFS.PreProcessor
                 //Throw in our flag so we don't double process!
                 rootElement.Add(new XAttribute("personLocationOrganization", "true"));
 
+                
+
                 var augmentedDoc = new XDocument();
                 augmentedDoc.Add(rootElement);
                 augmentedDoc.Save(string.Format(@"C:\Users\Batgar\Documents\Ships\{0}.xml", Path.GetFileNameWithoutExtension(file)));
@@ -223,6 +225,55 @@ namespace DANFS.PreProcessor
                         while (xmlReader.ReadState != ReadState.EndOfFile)
                         {
                             destinationElement.Add(XNode.ReadFrom(xmlReader));
+                        }
+                    }
+
+                    //Remove any LOCATION, PERSON, ORGANIZATION tags that are contained within a "i".
+                    var invalidPOLData = destinationElement.Elements().Where(e => (e.Name == "LOCATION" || e.Name == "ORGANIZATION" || e.Name == "PERSON") && string.Compare(e.Parent.Name.LocalName, "i", true) == 0);
+
+                    foreach (var invalidPOL in invalidPOLData)
+                    {
+                        //Log the tag we are removing.
+                        Console.WriteLine("Removing POL: {0}", invalidPOL.Parent);
+
+                        //Add all child nodes of the invalid POL tag to the parent.
+                        invalidPOL.Parent.Add(invalidPOL.Nodes().ToArray());
+                                               
+                        //Now safely remove the P,O,L tag with the contents safely copied.
+                        invalidPOL.Remove();
+                    }
+
+                    //Now that we have removed the tag, let's also associate any ship date to what may be in the "i" tag.
+
+                    var iTags = destinationElement.Elements().Where(e => string.Compare(e.Name.LocalName, "i", true) == 0);
+                    foreach (var iTag in iTags)
+                    {
+
+                        if (iTag.Attributes("ship-registry").Count() != 0)
+                        {
+                            continue;
+                        }
+
+                        //Check for a text node right after the tag that may contain a ship designation i.e. ()
+                        var followingTextNode = iTag.NodesAfterSelf().FirstOrDefault();
+                        if (followingTextNode != null && followingTextNode is XText)
+                        {
+                            var sourceElementText = (followingTextNode as XText).Value.Trim();
+                            var shipRegistryMatch = shipRegistryRegexLoose.Match(sourceElementText);
+                            if (shipRegistryMatch.Success && shipRegistryMatch.Index == 0)
+                            {
+                                iTag.Add(new XAttribute("ship-registry", "normalized"));
+                                iTag.Add(new XAttribute("ship-designation", shipRegistryMatch.Value));
+                            }
+                            else
+                            {
+                                var alternateShipRegistryMatch = shipRegistryAlternateRegexLoose.Match(sourceElementText);
+                                if (alternateShipRegistryMatch.Success && alternateShipRegistryMatch.Index == 0)
+                                {
+                                    iTag.Add(new XAttribute("ship-registry", "notnormalized"));
+                                    iTag.Add(new XAttribute("ship-designation", alternateShipRegistryMatch.Value));
+                                }
+                            }
                         }
                     }
 
@@ -493,6 +544,11 @@ namespace DANFS.PreProcessor
         Regex shipRegistryAlternateRegex = new Regex(@"\(.*\:", RegexOptions.Compiled);
 
         Regex shipRegistryRegex = new System.Text.RegularExpressions.Regex(@"\([A-Z]*\-[0-9]*\:", RegexOptions.Compiled);
+
+
+        Regex shipRegistryAlternateRegexLoose = new Regex(@"\(.*\)", RegexOptions.Compiled);
+
+        Regex shipRegistryRegexLoose = new System.Text.RegularExpressions.Regex(@"\([A-Z]*\-[0-9]*\)", RegexOptions.Compiled);
         //Regex dateRegex = new Regex(@"(\b\d{1,2}\D{0,3})?\b(January|February|March|April|May|June|July|August|September|October|November|December)(\s\d{0,4})?", RegexOptions.Compiled);
 
         //Crazy regex that picks up more dates
