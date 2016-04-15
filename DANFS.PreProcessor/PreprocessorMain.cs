@@ -22,6 +22,9 @@ namespace DANFS.PreProcessor
             //MakeLocationDictionary();
             //return;
 
+            TryGetRanksOfPeople();
+            return;
+
 
             var pathToMainDANFSDatabase = @"C:\Users\Batgar\Documents\danfs.sqlite3";
             var connection = new SQLiteConnection(string.Format("Data Source={0};Version=3", pathToMainDANFSDatabase));
@@ -78,10 +81,10 @@ namespace DANFS.PreProcessor
 
                     var processedValue = doc.Root.Attribute("date");
 
-                if (processedValue != null && processedValue.Value == "true")
-                {
-                    continue;
-                }
+                    if (processedValue != null && processedValue.Value == "true")
+                    {
+                        continue;
+                    }
 
                     XElement rootElement = new XElement("root");
 
@@ -107,9 +110,9 @@ namespace DANFS.PreProcessor
 
                     augmentedDoc.Save(string.Format(@"C:\Users\Batgar\Documents\Ships\{0}.xml", reader["id"]));
                     totalShipCount++;
-                    
+
                 }
-                catch(Exception e)
+                catch (Exception e)
                 {
                     Console.WriteLine("Error while processing ship {0} - {1}", reader["id"], e.Message);
                 }
@@ -134,7 +137,7 @@ namespace DANFS.PreProcessor
                 //Throw in our flag so we don't double process!
                 rootElement.Add(new XAttribute("personLocationOrganization", "true"));
 
-                
+
 
                 var augmentedDoc = new XDocument();
                 augmentedDoc.Add(rootElement);
@@ -143,8 +146,208 @@ namespace DANFS.PreProcessor
 
             Console.WriteLine("Total Ships: {0} -- Missing Registries: {1} - Total Dates Logged: {2}", totalShipCount, missingShipRegistries, totalDates);
 
-           
 
+
+        }
+
+        string[] possibleRanks = new string[] {
+                "Miss",
+                "Mrs.",
+                "Lt.",
+                "Ens.",
+                "Assistant Surgeon",
+                "Surgeon",
+                "Rear Admiral",
+                "Lt. Comdr.",
+                "Lt. (j.g.)",
+                "Master",
+                "Comdr.",
+                "Flag Officer",
+                "General",
+                "President",
+                "Capt.",
+                "Vice Admiral",
+                "Commodore",
+                "Secretary",
+                "Lt. (jg.)",
+                "Lt. (jg-)",
+                "Rear Adm.",
+                "Adm.",
+                "Governor",
+                "Vice Adm.",
+                "Sergeant",
+                "Electrician’s Mate 1st Class",
+                "Technician Fireman Apprentice",
+                "Prince",
+                "Brig. Gen.",
+                "Lt. Gen.",
+                "Maj. Gen.",
+                "Major General",
+                "Electrician Fireman",
+                "Fireman",
+                "Mate 3rd Class",
+                "Secretary of Defense",
+                "Secretary of",
+                "Chief Electronics Technician",
+                "Warfare Systems Operator",
+                "Gen.",
+                "Seaman",
+                "Tactical Coordinator Lt.",
+                "Dr.",
+                "Chief",
+                "Mate",
+                "Technician 3rd Class",
+                "Disposal Senior Chief",
+                "Acting Ensign",
+                "Acting Master",
+                "Mr.",
+                "Lt. Col.",
+                "Secretary of the Treasury",
+                "Radioman 1st Class",
+                "General",
+                "Queen",
+                "Acting Volunteer Lt.",
+                "Fleet Admiral",
+                "Brigadier General",
+                "Sir",
+                "Assistant Surgeon",
+                "Acting",
+                "Private, First Class",
+                "Quartermaster 1st Class"
+                "Mate 2d Class",
+                "Metalsmith 2d Class",
+                "Seaman 2nd class",
+                "Seaman 1st Class",
+                "Acting Vol. Lt",
+                "Vice Admiral",
+                "Admiral",
+                "Representative",
+                "Senator",
+                "Sen.",
+                "Officer 2d Class",
+                "Motor Machinist's Mate",
+                "Chief Commissioner",
+                "Commissioner",
+                "Acting Assistant Paymaster",
+                "Paymaster",
+                "Honorable",
+                "Maj.",
+                "Major",
+                "Quartermaster",
+                "Admiral Sir",
+                "Platoon Sergeant",
+                "Sgt.",
+                "Acting Master",
+                "Master",
+                "Leading Operator Mechanic",
+                "Major General Commandant",
+                "Commandant",
+                "Naval Constructor",
+                "Chief Torpedoman",
+                "Mate 2d Class",
+                "Second Master",
+                "Master",
+                "First Master",
+                "Governor",
+                "Captain",
+                "Commander",
+                "Lieutenant",
+                "Lieutenant Commander",
+                "Seaman 1st Class",
+                "Chief Gunner",
+                "Sailing Master",
+                "Col.",
+                "Lord",
+                "Naval Constructor",
+                "ex-President",
+                "Ambassador",
+                "Assistant Engineer",
+                "Master Commandant",
+                "King",
+                "Empress",
+                "Chief Boatswain's Mate",
+                "Congressman",
+                "Chief Engineer",
+                "Chief",
+                "Lieutenant Colonel",
+                "1st Lt.",
+                "Radioman 3d Class",
+                "Acting Volunteer Lieutenant",
+                "Mate",
+                "Navigator",
+                "Counsellor",
+                "Princess",
+                "Crown Princess",
+                "Chief Boatswain",
+                "Boatswain",
+                "Chief Boatswain’s Mate",
+                "Lieutenant General",
+                "Lt. Gen.",
+                "Lady",
+        };
+
+        string[] misparsedPersonPrefixShouldBeLocation = new string[] {
+            "NS",
+            "Holy",
+        "Point",
+        "Ste.",
+        "Battery",
+        "Fort",
+        "Port",
+        "Capes",
+        "Cape",
+        };
+
+        string[] ambiguousLocationPerson = new string[]
+        {
+            "St.",
+            "Saint",
+        };
+
+        string[] misparsedPerson = new string[]
+        {
+            "Big",
+            "Typhoons",
+            "Typhoon",
+            "Hurricane",
+            "Hurricanes",
+        };
+
+
+        private void TryGetRanksOfPeople()
+        {
+            List<string> possibleRanks = new List<string>();
+
+            int shipCount = 0;
+
+            //Now we will produce a location dictionary from all locations, and dump the JSON.
+            foreach (var file in Directory.GetFiles(@"C:\Users\Batgar\Documents\Ships", "*.xml"))
+            {
+                var doc = XDocument.Load(file);
+
+                foreach (var personElement in doc.Root.Descendants("PERSON"))
+                {
+
+                    //TODO: Only do this for now to get the master location list, skip anything in an italics node due to ship name formatting (i.e. New Jersey - Battleship)
+                    var textNodeBeforePerson = personElement.NodesBeforeSelf().LastOrDefault();
+
+                    if (textNodeBeforePerson != null && textNodeBeforePerson is XText)
+                    {
+                        var textNode = textNodeBeforePerson as XText;
+                        var textNodeValue = textNode.Value.Trim();
+
+                        //Get the last 3 words in the text, and write it out.
+                        var allWordsBySpace = textNodeValue.Split(' ');
+
+                        var lastThreeWords = allWordsBySpace.Where((o, i) => i > allWordsBySpace.Length - 4).ToArray();
+
+                        possibleRanks.Add(string.Join(" ", lastThreeWords));
+
+                    }
+                }
+            }
+
+            File.WriteAllLines(@"C:\Users\Batgar\Documents\ShipsStats\AllPossibleRanks.txt", possibleRanks.ToArray());
         }
 
         private void MakeLocationDictionary()
@@ -243,6 +446,8 @@ namespace DANFS.PreProcessor
                         invalidPOL.Remove();
                     }
 
+                  
+
                     //Now that we have removed the tag, let's also associate any ship date to what may be in the "i" tag.
 
                     var iTags = destinationElement.Elements().Where(e => string.Compare(e.Name.LocalName, "i", true) == 0);
@@ -277,9 +482,7 @@ namespace DANFS.PreProcessor
                         }
                     }
 
-                    //TODO: Search through the destination element and aggregate any LOCATION tags that are siblings.
-                    //Close, but no cigar. Need to make sure that outside text nodes with "," are aggregated, as well
-                    //any text node between LOCATION nodes are honored... Kind of hard to do....
+                    //Search through the destination element and aggregate any LOCATION tags that are siblings.
                     List<XNode> locationElementsToRemove = new List<XNode>();
 
                     var locationElements = destinationElement.Elements("LOCATION").ToArray();
@@ -330,20 +533,29 @@ namespace DANFS.PreProcessor
                             }
                         }
                     }
+
+                    //Cataloging alternate LOCATION types that we don't want to map, but we don't want to lose either.
+                    var locationMarkers = new Dictionary<string, string>()
+                    {
+                        { "Atlantic" , "Ocean" },
+                        { "Pacific", "Ocean" },
+                        { "Indian", "Ocean" },
+                        { "North America", "Continent" },
+                        { "South America", "Continent" },
+                        { "Africa", "Continent" },
+                        { "Europe", "Continent" },
+                        { "Asia", "Continent" },
+                        { "Antarctica", "Continent" },
+                        { "Australia", "Continent" },
+                        { "Arctic", "Region" },
+                        { "United States", "Country" },
+                        { "California", "Region" },
+                    };
+
+                    var invalidLocations = new string[] {  "United States Navy", "U.S.S" };
                        
                     
 
-                    /*if (locationElementsToRemove.Count != 0)
-                    {
-                        foreach (var locationElementToRemove in locationElementsToRemove)
-                        {
-                            locationElementToRemove.Remove();
-                        }
-                    }
-                    locationElementsToRemove.Clear();
-                    */
-
-                    //TODO: Eliminate any LOCATION / PERSON / ORGANIZATION tags that are the same as the ship name.
                 }
                 else if (node is XElement)
                 {
@@ -518,6 +730,7 @@ namespace DANFS.PreProcessor
                         var shipRegistryMatch = shipRegistryRegex.Match(sourceElementText);
                         if (shipRegistryMatch.Success && shipRegistryMatch.Index == 0)
                         {
+                            newDestinationElement.Add(new XAttribute("possible-history-start", "true"));
                             newDestinationElement.Add(new XAttribute("ship-registry", "normalized"));
                             shipRegistryElement = newDestinationElement;
                         }
@@ -526,6 +739,7 @@ namespace DANFS.PreProcessor
                             var alternateShipRegistryMatch = shipRegistryAlternateRegex.Match(sourceElementText);
                             if (alternateShipRegistryMatch.Success && alternateShipRegistryMatch.Index == 0)
                             {
+                                newDestinationElement.Add(new XAttribute("possible-history-start", "true"));
                                 newDestinationElement.Add(new XAttribute("ship-registry", "notnormalized"));
                                 shipRegistryElement = newDestinationElement;
                             }
