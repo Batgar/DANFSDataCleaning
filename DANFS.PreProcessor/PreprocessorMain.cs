@@ -19,11 +19,11 @@ namespace DANFS.PreProcessor
 
         public void Process()
         {
-            //MakeLocationDictionary();
-            //return;
-
-            TryGetRanksOfPeople();
+            MakeLocationDictionary();
             return;
+
+            //TryGetRanksOfPeople();
+            //return;
 
 
             var pathToMainDANFSDatabase = @"C:\Users\Batgar\Documents\danfs.sqlite3";
@@ -213,7 +213,7 @@ namespace DANFS.PreProcessor
                 "Assistant Surgeon",
                 "Acting",
                 "Private, First Class",
-                "Quartermaster 1st Class"
+                "Quartermaster 1st Class",
                 "Mate 2d Class",
                 "Metalsmith 2d Class",
                 "Seaman 2nd class",
@@ -350,8 +350,9 @@ namespace DANFS.PreProcessor
             File.WriteAllLines(@"C:\Users\Batgar\Documents\ShipsStats\AllPossibleRanks.txt", possibleRanks.ToArray());
         }
 
-        private void MakeLocationDictionary()
+        private async void MakeLocationDictionary()
         {
+
             List<string> uniqueLocations = new List<string>();
 
             int shipCount = 0;
@@ -381,6 +382,39 @@ namespace DANFS.PreProcessor
 
                 shipCount++;
             }
+
+
+           
+
+            //Create a SQLite 3 DB table and put all the locations into it. Look them up using the Google Maps API, try to get Lat / Long.
+            //ONly allowed 2,500 per day, so get 2,500 and see what happens?
+
+            var locationDatabasePath = @"C:\Users\Batgar.Documents\shiplocations.sqlite";
+
+            File.Delete(locationDatabasePath);
+
+            SQLiteConnection.CreateFile(locationDatabasePath);
+
+            var locationConnection = new SQLiteConnection("Data Source=MyDatabase.sqlite;Version=3;");
+            locationConnection.Open();
+
+            string createTableSql = "create table locations (name text, formattedAddress text, latitude real, longitude real)";
+
+            SQLiteCommand createTableCommand = new SQLiteCommand(createTableSql, locationConnection);
+            createTableCommand.ExecuteNonQuery();
+
+
+            string sql = "insert into locations (name, formattedAddress, latitude, longitude) values ({0}, {1}, {2}, {3})";
+
+            var insertCommand = new SQLiteCommand(sql, locationConnection);
+            insertCommand.ExecuteNonQuery();
+
+            
+
+        
+
+            locationConnection.Close();
+
 
             Console.WriteLine("There are {0} unique locations across {1} ships", uniqueLocations.Count, shipCount);
         }
