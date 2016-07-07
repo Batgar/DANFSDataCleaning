@@ -10,6 +10,7 @@ using edu.stanford.nlp.ie.crf;
 using System.IO;
 using System.Xml;
 using Newtonsoft.Json;
+using edu.stanford.nlp.sequences;
 
 namespace DANFS.PreProcessor
 {
@@ -17,16 +18,21 @@ namespace DANFS.PreProcessor
     {
         CRFClassifier classifier;
 
+        string ROOT_PATH = @"C:\Users\Dan Edgar\Documents";
+
         public void Process()
         {
-            MakeLocationDictionary();
-            return;
+
+            System.Diagnostics.Trace.Listeners.Add(new PreProcessTracing(Path.Combine(ROOT_PATH, "DANFSPreProcessLog.txt")));
+
+            //MakeLocationDictionary();
+            //return;
 
             //TryGetRanksOfPeople();
             //return;
 
 
-            var pathToMainDANFSDatabase = @"C:\Users\Dan Edgar\Documents\danfs.sqlite3";
+            var pathToMainDANFSDatabase = System.IO.Path.Combine(ROOT_PATH, "danfs.sqlite3");
             var connection = new SQLiteConnection(string.Format("Data Source={0};Version=3", pathToMainDANFSDatabase));
             connection.Open();
             var command = new SQLiteCommand("select * from danfs_ships", connection);
@@ -56,7 +62,7 @@ namespace DANFS.PreProcessor
             }
             //Serialize all to a JSON file.
 
-            string manifestJSONPath = @"C:\Users\Dan Edgar\Documents\Ships\manifest.json";
+            string manifestJSONPath = System.IO.Path.Combine(ROOT_PATH, @"Ships\manifest.json");
 
             if (File.Exists(manifestJSONPath))
             {
@@ -77,7 +83,7 @@ namespace DANFS.PreProcessor
                 try
                 {
                     var doc = XDocument.Parse("<root>" + (string)reader["history"] + "</root>");
-                    //Console.WriteLine("Ship {0} is valid XML", reader["title"]);
+                    
 
                     var processedValue = doc.Root.Attribute("date");
 
@@ -101,25 +107,25 @@ namespace DANFS.PreProcessor
 
                     if (shipRegistryElement == null)
                     {
-                        Console.WriteLine("No ship registry for {0}", reader["id"]);
+                        System.Diagnostics.Trace.WriteLine($"No ship registry for {reader["id"]}", "INFO");
                         missingShipRegistries++;
                     }
 
                     //Throw in our flag so we don't double process!
                     rootElement.Add(new XAttribute("date", "true"));
 
-                    augmentedDoc.Save(string.Format(@"C:\Users\Batgar\Documents\Ships\{0}.xml", reader["id"]));
+                    augmentedDoc.Save(System.IO.Path.Combine(ROOT_PATH, $@"Ships\{reader["id"]}.xml"));
                     totalShipCount++;
 
                 }
                 catch (Exception e)
                 {
-                    Console.WriteLine("Error while processing ship {0} - {1}", reader["id"], e.Message);
+                    System.Diagnostics.Trace.WriteLine($"Error while processing ship {reader["id"]} - {e.Message}", "ERROR");
                 }
             }
 
             //Now pass through it a second time, this time we are going to put in Person, Location, Organization information.
-            foreach (var file in Directory.GetFiles(@"C:\Users\Batgar\Documents\Ships", "*.xml"))
+            foreach (var file in Directory.GetFiles(System.IO.Path.Combine(ROOT_PATH, @"Ships"), "*.xml"))
             {
                 var doc = XDocument.Load(file);
 
@@ -141,10 +147,10 @@ namespace DANFS.PreProcessor
 
                 var augmentedDoc = new XDocument();
                 augmentedDoc.Add(rootElement);
-                augmentedDoc.Save(string.Format(@"C:\Users\Batgar\Documents\Ships\{0}.xml", Path.GetFileNameWithoutExtension(file)));
+                augmentedDoc.Save(System.IO.Path.Combine(ROOT_PATH, $@"Ships\{Path.GetFileNameWithoutExtension(file)}.xml"));
             }
 
-            Console.WriteLine("Total Ships: {0} -- Missing Registries: {1} - Total Dates Logged: {2}", totalShipCount, missingShipRegistries, totalDates);
+            System.Diagnostics.Trace.WriteLine($"Total Ships: {totalShipCount} -- Missing Registries: {missingShipRegistries} - Total Dates Logged: {totalDates}", "INFO");
 
 
 
@@ -341,7 +347,7 @@ namespace DANFS.PreProcessor
             int shipCount = 0;
 
             //Now we will produce a location dictionary from all locations, and dump the JSON.
-            foreach (var file in Directory.GetFiles(@"C:\Users\Batgar\Documents\Ships", "*.xml"))
+            foreach (var file in Directory.GetFiles(System.IO.Path.Combine(ROOT_PATH, "Ships"), "*.xml"))
             {
                 var doc = XDocument.Load(file);
 
@@ -367,13 +373,13 @@ namespace DANFS.PreProcessor
                 }
             }
 
-            File.WriteAllLines(@"C:\Users\Batgar\Documents\ShipsStats\AllPossibleRanks.txt", possibleRanks.ToArray());
+            File.WriteAllLines(System.IO.Path.Combine(ROOT_PATH, @"ShipsStats\AllPossibleRanks.txt"), possibleRanks.ToArray());
         }
 
         private async void MakeLocationDictionary()
         {
 
-            var locationDatabasePath = @"C:\Users\Batgar\Documents\shiplocations.sqlite";
+            var locationDatabasePath = System.IO.Path.Combine(ROOT_PATH, @"shiplocations.sqlite");
 
             File.Delete(locationDatabasePath);
 
@@ -392,7 +398,7 @@ namespace DANFS.PreProcessor
             int shipCount = 0;
 
             //Now we will produce a location dictionary from all locations, and dump the JSON.
-            foreach (var file in Directory.GetFiles(@"C:\Users\Batgar\Documents\Ships", "*.xml"))
+            foreach (var file in Directory.GetFiles(System.IO.Path.Combine(ROOT_PATH, @"Ships"), "*.xml"))
             {
                 var doc = XDocument.Load(file);
 
@@ -418,7 +424,7 @@ namespace DANFS.PreProcessor
             }
 
 
-            Console.WriteLine("There are {0} unique locations across {1} ships", uniqueLocations.Count, shipCount);
+            System.Diagnostics.Trace.WriteLine($"There are {uniqueLocations.Count} unique locations across {shipCount} ships", "INFO");
 
 
             //Create a SQLite 3 DB table and put all the locations into it. Look them up using the Google Maps API, try to get Lat / Long.
@@ -485,7 +491,7 @@ namespace DANFS.PreProcessor
             //Go through the list of all dates with no year, and give them this year as an attribute.
             foreach (var noYearDateElement in noYearDateElements)
             {
-                Console.WriteLine("Repairing Year for {0} with {1}", masterShipID, year);
+                System.Diagnostics.Trace.WriteLine($"Repairing Year for {masterShipID} with {year}", "REPAIR");
                 noYearDateElement.Add(new XAttribute("year", lastYear));
             }
 
@@ -504,8 +510,13 @@ namespace DANFS.PreProcessor
                     textValue = textValue.Replace("&", "&amp;").Replace(">", "&gt;").Replace("<", "&lt;");
                     
                     var classifierResult = classifier.classifyWithInlineXML(textValue);
-                    //Try to get locations out of it, just print them out for now....
-                    //Console.WriteLine("{0}\n", classifierResult);
+
+                    var classifierResults = classifier.classify(textValue);
+
+                    var cliqueTree = classifier.getCliqueTree(classifierResults);
+
+                    
+
                     var settings = new XmlReaderSettings
                     {
                         ConformanceLevel = ConformanceLevel.Fragment,
@@ -528,7 +539,7 @@ namespace DANFS.PreProcessor
                     foreach (var invalidPOL in invalidPOLData)
                     {
                         //Log the tag we are removing.
-                        Console.WriteLine("Removing POL: {0}", invalidPOL.Parent);
+                        System.Diagnostics.Trace.WriteLine($"Removing POL: {invalidPOL.Parent}", "REPAIR");
 
                         //Add all child nodes of the invalid POL tag to the parent.
                         invalidPOL.Parent.Add(invalidPOL.Nodes().ToArray());
@@ -610,7 +621,7 @@ namespace DANFS.PreProcessor
                                         {
                                             possibleLocationElement.Value += textNode.Value + otherLocationElement.Value;
 
-                                            Console.WriteLine("Aggregated Locations in {0}: {1}", masterShipID, possibleLocationElement.Value);
+                                            System.Diagnostics.Trace.WriteLine($"Aggregated Locations in {masterShipID}: {possibleLocationElement.Value}", "REPAIR");
 
                                             //Skip the next location element...
                                             locationElementIndex++;
@@ -725,7 +736,7 @@ namespace DANFS.PreProcessor
                                         else
                                         {
                                             noYearDateElements.Add(dateElement);
-                                            Console.WriteLine("2 - No year present for partial date - {0}", masterShipID);
+                                            System.Diagnostics.Trace.WriteLine($"No year present for partial date - {masterShipID}", "INFO");
                                             dateElement.Add(new XAttribute("invalid-year-value", "true"));
                                         }
                                     }
@@ -753,21 +764,21 @@ namespace DANFS.PreProcessor
                                     else
                                     {
                                         noYearDateElements.Add(dateElement);
-                                        Console.WriteLine("1- No year present for partial date - {0}", masterShipID);
+                                        System.Diagnostics.Trace.WriteLine($"No year present for partial date - {masterShipID}", "INFO");
                                         dateElement.Add(new XAttribute("invalid-year-value", "true"));
                                     }
                                 }
                                 else
                                 {
                                     //Is invalid.
-                                    Console.WriteLine("Is Invalid - 1 - {0}", masterShipID);
+                                    System.Diagnostics.Trace.WriteLine($"Date Is Invalid - {masterShipID}", "INFO");
                                     dateElement.Add(new XAttribute("invalid-one-value", "true"));
                                 }
                             }
                             else
                             {
                                 //Is invalid.
-                                Console.WriteLine("Is Invalid - 2 - {0}", masterShipID);
+                                System.Diagnostics.Trace.WriteLine($"Is Invalid - 2 - {masterShipID}", "INFO");
                                 dateElement.Add(new XAttribute("invalid", "true"));
                             }
 
