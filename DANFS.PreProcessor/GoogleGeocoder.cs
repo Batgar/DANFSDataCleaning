@@ -12,15 +12,19 @@ namespace DANFS.PreProcessor
     {
         public async Task<GeocodeResultMain> DoGecode(string address)
         {
+            var rawJSON = await DoGeocodeRawJSON(address);
+            return Newtonsoft.Json.JsonConvert.DeserializeObject<GeocodeResultMain>(rawJSON);
+        }
+
+        public async Task<string> DoGeocodeRawJSON(string address)
+        {
             var client = new HttpClient();
 
             var uriString = string.Format("http://maps.googleapis.com/maps/api/geocode/json?address={0}&sensor=false", Uri.EscapeDataString(address));
 
             Uri uri = new Uri(uriString);
 
-            var jsonRawString = await client.GetStringAsync(uri);
-
-            return Newtonsoft.Json.JsonConvert.DeserializeObject<GeocodeResultMain>(jsonRawString);
+           return await client.GetStringAsync(uri);           
         }
     }
 

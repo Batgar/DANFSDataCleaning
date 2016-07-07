@@ -26,7 +26,7 @@ namespace DANFS.PreProcessor
             //return;
 
 
-            var pathToMainDANFSDatabase = @"C:\Users\Batgar\Documents\danfs.sqlite3";
+            var pathToMainDANFSDatabase = @"C:\Users\Dan Edgar\Documents\danfs.sqlite3";
             var connection = new SQLiteConnection(string.Format("Data Source={0};Version=3", pathToMainDANFSDatabase));
             connection.Open();
             var command = new SQLiteCommand("select * from danfs_ships", connection);
@@ -37,7 +37,7 @@ namespace DANFS.PreProcessor
             totalDates = 0;
 
             // Path to the folder with classifiers models
-            var jarRoot = @"C:\Users\Batgar\Downloads\stanford-ner-2015-12-09\stanford-ner-2015-12-09";
+            var jarRoot = @"C:\Users\Dan Edgar\Downloads\stanford-ner-2015-12-09\stanford-ner-2015-12-09";
             var classifiersDirecrory = System.IO.Path.Combine(jarRoot, @"classifiers");
 
             // Loading 3 class classifier model
@@ -56,7 +56,7 @@ namespace DANFS.PreProcessor
             }
             //Serialize all to a JSON file.
 
-            string manifestJSONPath = @"C:\Users\Batgar\Documents\Ships\manifest.json";
+            string manifestJSONPath = @"C:\Users\Dan Edgar\Documents\Ships\manifest.json";
 
             if (File.Exists(manifestJSONPath))
             {
@@ -313,6 +313,26 @@ namespace DANFS.PreProcessor
             "Hurricanes",
         };
 
+        //Cataloging alternate LOCATION types that we don't want to map, but we don't want to lose either.
+        Dictionary<string, string> locationMarkers = new Dictionary<string, string>()
+                    {
+                        { "Atlantic" , "Ocean" },
+                        { "Pacific", "Ocean" },
+                        { "Indian", "Ocean" },
+                        { "North America", "Continent" },
+                        { "South America", "Continent" },
+                        { "Africa", "Continent" },
+                        { "Europe", "Continent" },
+                        { "Asia", "Continent" },
+                        { "Antarctica", "Continent" },
+                        { "Australia", "Continent" },
+                        { "Arctic", "Region" },
+                        { "United States", "Country" },
+                        { "California", "Region" },
+                    };
+
+        string[] invalidLocations = new string[] { "United States Navy", "U.S.S" };
+
 
         private void TryGetRanksOfPeople()
         {
@@ -353,6 +373,20 @@ namespace DANFS.PreProcessor
         private async void MakeLocationDictionary()
         {
 
+            var locationDatabasePath = @"C:\Users\Batgar\Documents\shiplocations.sqlite";
+
+            File.Delete(locationDatabasePath);
+
+            SQLiteConnection.CreateFile(locationDatabasePath);
+
+            var locationConnection = new SQLiteConnection(string.Format("Data Source={0};Version=3;", locationDatabasePath));
+            locationConnection.Open();
+
+            string createTableSql = "create table locationJSON (name text, geocodeJSON text)";
+
+            SQLiteCommand createTableCommand = new SQLiteCommand(createTableSql, locationConnection);
+            createTableCommand.ExecuteNonQuery();
+
             List<string> uniqueLocations = new List<string>();
 
             int shipCount = 0;
@@ -384,40 +418,63 @@ namespace DANFS.PreProcessor
             }
 
 
-           
+            Console.WriteLine("There are {0} unique locations across {1} ships", uniqueLocations.Count, shipCount);
+
 
             //Create a SQLite 3 DB table and put all the locations into it. Look them up using the Google Maps API, try to get Lat / Long.
             //ONly allowed 2,500 per day, so get 2,500 and see what happens?
 
-            var locationDatabasePath = @"C:\Users\Batgar.Documents\shiplocations.sqlite";
-
-            File.Delete(locationDatabasePath);
-
-            SQLiteConnection.CreateFile(locationDatabasePath);
-
-            var locationConnection = new SQLiteConnection("Data Source=MyDatabase.sqlite;Version=3;");
-            locationConnection.Open();
-
-            string createTableSql = "create table locations (name text, formattedAddress text, latitude real, longitude real)";
-
-            SQLiteCommand createTableCommand = new SQLiteCommand(createTableSql, locationConnection);
-            createTableCommand.ExecuteNonQuery();
-
-
-            string sql = "insert into locations (name, formattedAddress, latitude, longitude) values ({0}, {1}, {2}, {3})";
-
-            var insertCommand = new SQLiteCommand(sql, locationConnection);
-            insertCommand.ExecuteNonQuery();
-
             
 
-        
+            var geocoder = new GoogleGeocoder();
+
+            int count = 0;
+
+            foreach (var location in uniqueLocations)
+            {
+                //Stop after 10 just for debugging purposes.
+                /*if (count >= 10)
+                    break;*/
+
+                //Wait 4 seconds between calls. Let's see how far we can get.
+                System.Threading.Thread.Sleep(4500);
+
+                var shouldBeExcluded = this.invalidLocations.Any(o => string.Compare(o, location, true) == 0);
+                if (!shouldBeExcluded)
+                {
+                    //Now check the locationMarkers and skip those too.
+                    shouldBeExcluded = this.locationMarkers.Keys.Any(o => string.Compare(o, location, true) == 0);
+                    if (!shouldBeExcluded)
+                    {
+                        try
+                        {
+                            var geocoderResultRawJSON = await geocoder.DoGeocodeRawJSON(location);
+
+                            SQLiteCommand insertCommand = new SQLiteCommand("insert into locationJSON (name, geocodeJSON) values (@name, @geocodeJSON)", locationConnection);
+                            insertCommand.Parameters.Add(new SQLiteParameter("@name", location));
+                            insertCommand.Parameters.Add(new SQLiteParameter("@geocodeJSON", geocoderResultRawJSON));
+
+                            insertCommand.ExecuteNonQuery();
+                        }
+                        catch
+                        {
+                            //The geocoder broke. Let's bail.
+                            break;
+                        }
+                    }
+
+                }
+                count++;     
+            }
+
+
+           
+
 
             locationConnection.Close();
 
 
-            Console.WriteLine("There are {0} unique locations across {1} ships", uniqueLocations.Count, shipCount);
-        }
+            }
 
         int totalDates = 0;
         string lastYear = string.Empty;
@@ -568,25 +625,7 @@ namespace DANFS.PreProcessor
                         }
                     }
 
-                    //Cataloging alternate LOCATION types that we don't want to map, but we don't want to lose either.
-                    var locationMarkers = new Dictionary<string, string>()
-                    {
-                        { "Atlantic" , "Ocean" },
-                        { "Pacific", "Ocean" },
-                        { "Indian", "Ocean" },
-                        { "North America", "Continent" },
-                        { "South America", "Continent" },
-                        { "Africa", "Continent" },
-                        { "Europe", "Continent" },
-                        { "Asia", "Continent" },
-                        { "Antarctica", "Continent" },
-                        { "Australia", "Continent" },
-                        { "Arctic", "Region" },
-                        { "United States", "Country" },
-                        { "California", "Region" },
-                    };
-
-                    var invalidLocations = new string[] {  "United States Navy", "U.S.S" };
+                 
                        
                     
 
