@@ -11,6 +11,8 @@ using System.IO;
 using System.Xml;
 using Newtonsoft.Json;
 using edu.stanford.nlp.sequences;
+using edu.stanford.nlp.ling;
+using edu.stanford.nlp.process;
 
 namespace DANFS.PreProcessor
 {
@@ -500,22 +502,174 @@ namespace DANFS.PreProcessor
 
         List<XElement> noYearDateElements = new List<XElement>();
 
+        private String getNotNullString(String inString)
+        {
+            if (string.IsNullOrEmpty(inString))
+            {
+                return string.Empty;
+            }
+            return inString;
+        }
+
+       double getProb(string tag, int wordIndex, CRFCliqueTree cliqueTree)
+        {
+            for (var iter = classifier.classIndex.iterator(); iter.hasNext();)
+            {
+                var label = iter.next();
+                int labelIndex = classifier.classIndex.indexOf(label);
+                double prob = cliqueTree.prob(wordIndex, labelIndex);
+                if (label as string == tag)
+                {
+                    return prob;
+                }
+
+            }
+            return 0.0;
+        }
+
+       private void printAnswersInlineXML(java.util.List doc, StringBuilder sb, CRFCliqueTree cliqueTree)
+        {
+            String background = "O";
+            String prevTag = background;
+            int wordCount = 0;
+            for (var wordIter = doc.iterator(); wordIter.hasNext();)
+            {
+                var wi = wordIter.next() as CoreLabel;
+                //(classifyList.iterator().next() as CoreLabel).get(new CoreAnnotations.AnswerAnnotation().getClass())
+                String tag = getNotNullString(wi.get(new CoreAnnotations.AnswerAnnotation().getClass()) as String);
+
+      String before = getNotNullString(wi.get(new CoreAnnotations.BeforeAnnotation().getClass()) as String);
+
+      String current = getNotNullString(wi.get(new CoreAnnotations.OriginalTextAnnotation().getClass()) as String);
+      if (tag!=prevTag) {
+        if (prevTag!=background && tag!=background) {
+          sb.print("</");
+          sb.print(prevTag);
+          sb.print('>');
+
+          sb.print(before);
+
+          sb.print('<');
+          sb.print(tag);
+                        sb.print(" PROBABILITY=\"");
+                        sb.print(getProb(tag, wordCount, cliqueTree));
+                        sb.print("\" ");                        
+          sb.print('>');
+    } else if (prevTag !=background) {
+          sb.print("</");
+          sb.print(prevTag);
+          sb.print('>');
+          sb.print(before);
+} else if (tag != background) {
+          sb.print(before);
+          sb.print('<');
+          sb.print(tag);
+                        sb.print(" PROBABILITY=\"");
+                        sb.print(getProb(tag, wordCount, cliqueTree));
+                        sb.print("\" ");
+
+                        sb.print('>');
+        }
+      } else {
+        sb.print(before);
+      }
+      sb.print(current);
+String afterWS = getNotNullString(wi.get(new CoreAnnotations.AfterAnnotation().getClass()) as String);
+
+      if (tag!=background && !wordIter.hasNext()) {
+        sb.print("</");
+        sb.print(tag);
+        sb.print('>');
+prevTag = background;
+      } else {
+        prevTag = tag;
+      }
+      sb.print(afterWS);
+
+                wordCount++;
+    }
+  }
+
+
         void ProcessPersonLocationOrganization(string masterShipID, XElement element, XElement destinationElement)
         {
+
             foreach (var node in element.Nodes())
             {
                 if (node is XText)
                 {
                     var textValue = (node as XText).Value;
                     textValue = textValue.Replace("&", "&amp;").Replace(">", "&gt;").Replace("<", "&lt;");
-                    
-                    var classifierResult = classifier.classifyWithInlineXML(textValue);
 
-                    var classifierResults = classifier.classify(textValue);
+                    //var classifierResult = classifier.classifyWithInlineXML(textValue);
 
-                    var cliqueTree = classifier.getCliqueTree(classifierResults);
+                   
 
                     
+                    var tempFileName = System.IO.Path.GetTempFileName();
+                    var tempFile = File.Open(tempFileName, FileMode.OpenOrCreate);
+                    var bytes = Encoding.UTF8.GetBytes(textValue);
+                    tempFile.Write(bytes, 0, bytes.Length);
+                    tempFile.Close();
+
+                    var fileClassify = classifier.classify(textValue);
+                    
+                    var sb = new StringBuilder();
+                    for (var itr = fileClassify.iterator(); itr.hasNext();)
+                    {                       
+                        var sentence = itr.next() as java.util.List;
+                        var cliqueTree = classifier.getCliqueTree(sentence);
+                        printAnswersInlineXML(sentence , sb, cliqueTree);
+                    }
+
+                    var classifierResult = sb.ToString();
+
+                    /*var tokenizerFactory = PTBTokenizer.factory(new CoreLabelTokenFactory(), "");
+                    var sent2Reader = new java.io.StringReader(textValue);
+                    var rawWords = tokenizerFactory.getTokenizer(sent2Reader).tokenize();
+                                       
+
+                    var classifyList = classifier.classify(rawWords);
+
+                    var sb = new StringBuilder();
+                    printAnswersInlineXML(classifyList, sb);
+                    var possibleInlineXML = sb.ToString();
+
+                    var cliqueTree = classifier.getCliqueTree(classifyList);
+
+                    //Retrieves what the token was classified as. Woo! - Just match it up to the classIndex + cliqueTree and you get the probability.
+
+                    //? (classifyList.iterator().next() as CoreLabel).get(new CoreAnnotations.AnswerAnnotation().getClass())
+
+                    List<ClassifyProbabilities> probs = new List<ClassifyProbabilities>();
+
+                    for (int cliqueIndex = 0; cliqueIndex < cliqueTree.length(); cliqueIndex++)
+                    {
+
+                        var wi = classifyList.get(cliqueIndex) as CoreLabel;
+                        //(classifyList.iterator().next() as CoreLabel).get(new CoreAnnotations.AnswerAnnotation().getClass())
+                        String tag = getNotNullString(wi.get(new CoreAnnotations.AnswerAnnotation().getClass()) as String);
+                        String originalText = getNotNullString(wi.get(new CoreAnnotations.OriginalTextAnnotation().getClass()) as String);
+
+                        if (tag == "O")
+                        {
+                            continue;
+                        }
+
+                        for (var iter = classifier.classIndex.iterator(); iter.hasNext();)
+                        {
+                            var label = iter.next();
+                            int labelIndex = classifier.classIndex.indexOf(label);
+                            double prob = cliqueTree.prob(cliqueIndex, labelIndex);
+                            if (label as string == tag)
+                            {
+                                probs.Add(new ClassifyProbabilities() { Probability = prob, OriginalText = originalText, Classification = tag });
+                            }
+                          
+                        }
+                    }*/
+
+
 
                     var settings = new XmlReaderSettings
                     {
@@ -859,6 +1013,24 @@ namespace DANFS.PreProcessor
             //Regex that seems most effective for date extraction:
             // /(\b\d{1,2}\D{0,3})?\b(January|February|March|April|May|June|July|August|September|October|November|December)(\s\d{0,4})?/g
 
+        }
+    }
+
+    public static class StringBuilderExtension
+    {
+        public static void print(this StringBuilder sb, string stringToWrite)
+        {
+            sb.Append(stringToWrite);
+        }
+
+        public static void print(this StringBuilder sb, char charToWrite)
+        {
+            sb.Append(charToWrite);
+        }
+
+        public static void print(this StringBuilder sb, double doubleToWrite)
+        {
+            sb.Append(doubleToWrite);
         }
     }
 }

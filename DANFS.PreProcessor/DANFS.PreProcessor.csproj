@@ -202,6 +202,7 @@
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </ApplicationDefinition>
+    <Compile Include="ClassifyProbabilities.cs" />
     <Compile Include="GoogleGeocoder.cs" />
     <Compile Include="PreProcessTracing.cs" />
     <Compile Include="ShipManifestEntry.cs" />
