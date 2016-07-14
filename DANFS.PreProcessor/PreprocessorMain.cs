@@ -116,7 +116,13 @@ namespace DANFS.PreProcessor
                     //Throw in our flag so we don't double process!
                     rootElement.Add(new XAttribute("date", "true"));
 
-                    augmentedDoc.Save(System.IO.Path.Combine(ROOT_PATH, $@"Ships\{reader["id"]}.xml"));
+                    var shipFileName = System.IO.Path.Combine(ROOT_PATH, $@"Ships\{reader["id"]}.xml");
+
+                    augmentedDoc.Save(shipFileName);
+
+                    //TODO: Start processing the NER stuff....
+
+
                     totalShipCount++;
 
                 }
@@ -127,35 +133,84 @@ namespace DANFS.PreProcessor
             }
 
             //Now pass through it a second time, this time we are going to put in Person, Location, Organization information.
-            foreach (var file in Directory.GetFiles(System.IO.Path.Combine(ROOT_PATH, @"Ships"), "*.xml"))
-            {
-                var doc = XDocument.Load(file);
+            var fileNames = Directory.GetFiles(System.IO.Path.Combine(ROOT_PATH, @"Ships"), "*.xml");
+            var fileCount = fileNames.Length;
+            {                
+                bool keepGoing = true;
+                int chunkSize = 500;
+               
+                var fileChunk = fileNames.Take(chunkSize);
 
-                XElement rootElement = new XElement("root");
+                List<Task> allRunningTasks = new List<Task>();
 
-                var processedValue = doc.Root.Attribute("personLocationOrganization");
+                allRunningTasks.AddRange(GetNextTaskBank(fileChunk, out keepGoing, chunkSize));
 
-                if (processedValue != null && processedValue.Value == "true")
-                {
-                    continue;
-                }
+                int processedCount = allRunningTasks.Count;
 
-                ProcessPersonLocationOrganization(Path.GetFileNameWithoutExtension(file), doc.Root, rootElement);
+                Task[] taskPool = allRunningTasks.ToArray();
 
-                //Throw in our flag so we don't double process!
-                rootElement.Add(new XAttribute("personLocationOrganization", "true"));
+                do
+                { 
+                    var completedTaskIndex = Task.WaitAny(taskPool);
+                    processedCount += 1;
+                    if (processedCount >= fileCount)
+                    {
+                        break;
+                    }
 
+                    var nextTaskBank = GetNextTaskBank(fileNames.Skip(processedCount).Take(1), out keepGoing, 1);
+                    if (keepGoing)
+                    {
+                        taskPool[completedTaskIndex] = nextTaskBank[0];
+                    }
+                 
+                } while (keepGoing);
 
-
-                var augmentedDoc = new XDocument();
-                augmentedDoc.Add(rootElement);
-                augmentedDoc.Save(System.IO.Path.Combine(ROOT_PATH, $@"Ships\{Path.GetFileNameWithoutExtension(file)}.xml"));
             }
 
             System.Diagnostics.Trace.WriteLine($"Total Ships: {totalShipCount} -- Missing Registries: {missingShipRegistries} - Total Dates Logged: {totalDates}", "INFO");
 
 
 
+        }
+
+        Task[] GetNextTaskBank(IEnumerable<string> files, out bool keepGoing, int chunkSize)
+        {
+            var tasks = new List<Task>();
+
+            keepGoing = true;
+            
+            foreach (var file in files)
+            {
+                tasks.Add(Task.Run(new Action(() =>
+                {
+                    var doc = XDocument.Load(file);
+
+                    XElement rootElement = new XElement("root");
+
+                    var processedValue = doc.Root.Attribute("personLocationOrganization");
+
+                    if (processedValue != null && processedValue.Value == "true")
+                    {
+                        return;
+                    }
+
+                    ProcessPersonLocationOrganization(Path.GetFileNameWithoutExtension(file), doc.Root, rootElement);
+
+                    //Throw in our flag so we don't double process!
+                    rootElement.Add(new XAttribute("personLocationOrganization", "true"));
+
+
+
+                    var augmentedDoc = new XDocument();
+                    augmentedDoc.Add(rootElement);
+                    augmentedDoc.Save(System.IO.Path.Combine(ROOT_PATH, $@"Ships\{Path.GetFileNameWithoutExtension(file)}.xml"));
+                })));
+            }                
+
+            keepGoing = tasks.Count() == chunkSize;
+
+            return tasks.ToArray();
         }
 
         string[] possibleRanks = new string[] {
@@ -601,16 +656,7 @@ prevTag = background;
                     var textValue = (node as XText).Value;
                     textValue = textValue.Replace("&", "&amp;").Replace(">", "&gt;").Replace("<", "&lt;");
 
-                    //var classifierResult = classifier.classifyWithInlineXML(textValue);
-
-                   
-
-                    
-                    var tempFileName = System.IO.Path.GetTempFileName();
-                    var tempFile = File.Open(tempFileName, FileMode.OpenOrCreate);
-                    var bytes = Encoding.UTF8.GetBytes(textValue);
-                    tempFile.Write(bytes, 0, bytes.Length);
-                    tempFile.Close();
+                    //var classifierResult = classifier.classifyWithInlineXML(textValue);                    
 
                     var fileClassify = classifier.classify(textValue);
                     
