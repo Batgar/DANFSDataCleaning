@@ -22,6 +22,11 @@ namespace DANFS.PreProcessor
 
         string ROOT_PATH = @"C:\Users\Dan Edgar\Documents";
 
+        public void DoCreateLocationDatabase()
+        {
+
+        }
+        
         public void DoCreateDateDatabase()
         {
             var dateDatabasePath = System.IO.Path.Combine(ROOT_PATH, @"shipdates.sqlite");
@@ -139,6 +144,11 @@ namespace DANFS.PreProcessor
                         continue;
                     }
 
+                    doc.Root.Add(new XAttribute("source_title", reader["title"]));
+                    doc.Root.Add(new XAttribute("source_subtitle", reader["subtitle"] == null ? string.Empty : reader["subtitle"]));
+                    doc.Root.Add(new XAttribute("source_uri", reader["url"]));
+                    doc.Root.Add(new XAttribute("source_id", reader["id"]));
+
                     XElement rootElement = new XElement("root");
 
                     lastYear = string.Empty;
@@ -231,7 +241,9 @@ namespace DANFS.PreProcessor
                 shipManifestEntries.Add(new ShipManifestEntry()
                 {
                     ID = manifestReader["id"] as string,
-                    Title = manifestReader["title"] as string
+                    Title = manifestReader["title"] as string,
+                    URL = manifestReader["url"] as string,
+                    Subtitle = manifestReader["subtitle"] == null ? string.Empty : manifestReader["subtitle"] as string
                 });
             }
             //Serialize all to a JSON file.
@@ -474,8 +486,6 @@ namespace DANFS.PreProcessor
         private void TryGetRanksOfPeople()
         {
             List<string> possibleRanks = new List<string>();
-
-            int shipCount = 0;
 
             //Now we will produce a location dictionary from all locations, and dump the JSON.
             foreach (var file in Directory.GetFiles(System.IO.Path.Combine(ROOT_PATH, "Ships"), "*.xml"))

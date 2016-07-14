@@ -15,5 +15,7 @@ namespace DANFS.PreProcessor
 
         [JsonProperty(PropertyName ="id")]
         public string ID { get; set; }
+        public string URL { get; internal set; }
+        public string Subtitle { get; internal set; }
     }
 }
