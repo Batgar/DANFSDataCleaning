@@ -22,6 +22,75 @@ namespace DANFS.PreProcessor
 
         string ROOT_PATH = @"C:\Users\Dan Edgar\Documents";
 
+        public void DoCreateDateDatabase()
+        {
+            var dateDatabasePath = System.IO.Path.Combine(ROOT_PATH, @"shipdates.sqlite");
+
+            File.Delete(dateDatabasePath);
+
+            SQLiteConnection.CreateFile(dateDatabasePath);
+
+            var dateConnection = new SQLiteConnection(string.Format("Data Source={0};Version=3;", dateDatabasePath));
+            dateConnection.Open();
+
+            string createTableSql = "create table shipdate (name text, date_guid text, year text, month text, day text, preview text)";
+
+            SQLiteCommand createTableCommand = new SQLiteCommand(createTableSql, dateConnection);
+            createTableCommand.ExecuteNonQuery();
+
+            var fileNames = Directory.GetFiles(System.IO.Path.Combine(ROOT_PATH, @"Ships"), "*.xml");
+            foreach (var fileName in fileNames)
+            {
+                //Log the fileName as the ID of the ship.
+                //Search through the XML looking for
+                // - <date year="1795" month="August" day="15">15 August 1795</date>
+                // Add a UDID per date.
+                // Log the GUID, ID of ship, year, month, day, into SQLite.
+                // Then we should be able to query the SQLite DB by the above, find the relevant date in the XML, and print out the paragraph from the doc as needed.
+                var doc = XDocument.Load(fileName);
+
+                foreach (var date in doc.Descendants("date"))
+                {
+                    var dateGuid = Guid.NewGuid();
+                    date.Add(new XAttribute("date_guid", dateGuid.ToString()));
+
+                    SQLiteCommand insertCommand = new SQLiteCommand("insert into shipdate (name, date_guid, year, month, day, preview) values (@name, @date_guid, @year, @month, @day, @preview)", dateConnection);
+
+                    insertCommand.Parameters.Add(new SQLiteParameter("@name", Path.GetFileNameWithoutExtension(fileName)));
+                    insertCommand.Parameters.Add(new SQLiteParameter("@date_guid", dateGuid.ToString()));
+
+                    var year = date.Attribute("year") != null ?  date.Attribute("year").Value : string.Empty;
+                    insertCommand.Parameters.Add(new SQLiteParameter("@year", year));
+
+                    var month = date.Attribute("month") != null ? date.Attribute("month").Value : string.Empty;
+                    insertCommand.Parameters.Add(new SQLiteParameter("@month", month));
+
+                    var day = date.Attribute("day") != null ? date.Attribute("day").Value : string.Empty;
+                    insertCommand.Parameters.Add(new SQLiteParameter("@day", day));
+
+                    var preview = GeneratePreview(date);
+                    insertCommand.Parameters.Add(new SQLiteParameter("@preview", preview));
+
+                    insertCommand.ExecuteNonQuery();
+                }
+
+                //Save the changed dates as we added a date_guid to every date in the doc.
+                doc.Save(fileName);
+            }
+        }
+
+        private string GeneratePreview(XElement element)
+        {
+            var previousTextNode = element.PreviousNode as XText;
+
+            var nextTextNode = element.NextNode as XText;
+
+            var prevText = previousTextNode != null ? previousTextNode.Value : string.Empty;
+            var nextText = nextTextNode != null ? nextTextNode.Value : string.Empty;
+
+            return $"{prevText}{element.Value}{nextText}";
+        }
+
         public void Process()
         {
 
@@ -39,6 +108,7 @@ namespace DANFS.PreProcessor
             connection.Open();
             var command = new SQLiteCommand("select * from danfs_ships", connection);
             var manifestReader = command.ExecuteReader();
+            CreateManifest(manifestReader);
 
             int totalShipCount = 0;
             int missingShipRegistries = 0;
@@ -52,31 +122,6 @@ namespace DANFS.PreProcessor
             classifier = CRFClassifier.getClassifierNoExceptions(
                 classifiersDirecrory + @"\english.all.3class.distsim.crf.ser.gz");
 
-            //Generates a JSON manifest
-            List<ShipManifestEntry> shipManifestEntries = new List<ShipManifestEntry>();
-            while (manifestReader.Read())
-            {
-                shipManifestEntries.Add(new ShipManifestEntry()
-                {
-                    ID = manifestReader["id"] as string,
-                    Title = manifestReader["title"] as string
-                });
-            }
-            //Serialize all to a JSON file.
-
-            string manifestJSONPath = System.IO.Path.Combine(ROOT_PATH, @"Ships\manifest.json");
-
-            if (File.Exists(manifestJSONPath))
-            {
-                File.Delete(manifestJSONPath);
-            }
-
-            System.IO.File.WriteAllText(manifestJSONPath, JsonConvert.SerializeObject(shipManifestEntries));
-
-            manifestReader.Close();
-
-            manifestReader = null;
-
             var reader = command.ExecuteReader();
 
             //Generates all files and inserts dates.
@@ -85,7 +130,7 @@ namespace DANFS.PreProcessor
                 try
                 {
                     var doc = XDocument.Parse("<root>" + (string)reader["history"] + "</root>");
-                    
+
 
                     var processedValue = doc.Root.Attribute("date");
 
@@ -133,12 +178,20 @@ namespace DANFS.PreProcessor
             }
 
             //Now pass through it a second time, this time we are going to put in Person, Location, Organization information.
+            DoNamedEntityRecognition();
+
+            System.Diagnostics.Trace.WriteLine($"Total Ships: {totalShipCount} -- Missing Registries: {missingShipRegistries} - Total Dates Logged: {totalDates}", "INFO");
+
+        }
+
+        private void DoNamedEntityRecognition()
+        {
             var fileNames = Directory.GetFiles(System.IO.Path.Combine(ROOT_PATH, @"Ships"), "*.xml");
             var fileCount = fileNames.Length;
-            {                
+            {
                 bool keepGoing = true;
                 int chunkSize = 500;
-               
+
                 var fileChunk = fileNames.Take(chunkSize);
 
                 List<Task> allRunningTasks = new List<Task>();
@@ -150,7 +203,7 @@ namespace DANFS.PreProcessor
                 Task[] taskPool = allRunningTasks.ToArray();
 
                 do
-                { 
+                {
                     var completedTaskIndex = Task.WaitAny(taskPool);
                     processedCount += 1;
                     if (processedCount >= fileCount)
@@ -163,15 +216,36 @@ namespace DANFS.PreProcessor
                     {
                         taskPool[completedTaskIndex] = nextTaskBank[0];
                     }
-                 
+
                 } while (keepGoing);
 
             }
+        }
 
-            System.Diagnostics.Trace.WriteLine($"Total Ships: {totalShipCount} -- Missing Registries: {missingShipRegistries} - Total Dates Logged: {totalDates}", "INFO");
+        private void CreateManifest(SQLiteDataReader manifestReader)
+        {
+            //Generates a JSON manifest
+            List<ShipManifestEntry> shipManifestEntries = new List<ShipManifestEntry>();
+            while (manifestReader.Read())
+            {
+                shipManifestEntries.Add(new ShipManifestEntry()
+                {
+                    ID = manifestReader["id"] as string,
+                    Title = manifestReader["title"] as string
+                });
+            }
+            //Serialize all to a JSON file.
 
+            string manifestJSONPath = System.IO.Path.Combine(ROOT_PATH, @"Ships\manifest.json");
 
+            if (File.Exists(manifestJSONPath))
+            {
+                File.Delete(manifestJSONPath);
+            }
 
+            System.IO.File.WriteAllText(manifestJSONPath, JsonConvert.SerializeObject(shipManifestEntries));
+
+            manifestReader.Close();
         }
 
         Task[] GetNextTaskBank(IEnumerable<string> files, out bool keepGoing, int chunkSize)
@@ -487,7 +561,7 @@ namespace DANFS.PreProcessor
             //Create a SQLite 3 DB table and put all the locations into it. Look them up using the Google Maps API, try to get Lat / Long.
             //ONly allowed 2,500 per day, so get 2,500 and see what happens?
 
-            
+
 
             var geocoder = new GoogleGeocoder();
 
@@ -527,17 +601,10 @@ namespace DANFS.PreProcessor
                     }
 
                 }
-                count++;     
+                count++;
             }
-
-
-           
-
-
             locationConnection.Close();
-
-
-            }
+        }
 
         int totalDates = 0;
         string lastYear = string.Empty;
@@ -582,7 +649,14 @@ namespace DANFS.PreProcessor
             return 0.0;
         }
 
-       private void printAnswersInlineXML(java.util.List doc, StringBuilder sb, CRFCliqueTree cliqueTree)
+        /// <summary>
+        /// This is a 1:1 port of the matching Java method from:
+        /// https://github.com/stanfordnlp/CoreNLP/blob/f569983c8ad4e7890139b77775865cce1b82d4dc/src/edu/stanford/nlp/sequences/PlainTextDocumentReaderAndWriter.java#L418
+        /// </summary>
+        /// <param name="doc"></param>
+        /// <param name="sb"></param>
+        /// <param name="cliqueTree"></param>
+        private void printAnswersInlineXML(java.util.List doc, StringBuilder sb, CRFCliqueTree cliqueTree)
         {
             String background = "O";
             String prevTag = background;
@@ -593,57 +667,68 @@ namespace DANFS.PreProcessor
                 //(classifyList.iterator().next() as CoreLabel).get(new CoreAnnotations.AnswerAnnotation().getClass())
                 String tag = getNotNullString(wi.get(new CoreAnnotations.AnswerAnnotation().getClass()) as String);
 
-      String before = getNotNullString(wi.get(new CoreAnnotations.BeforeAnnotation().getClass()) as String);
+                String before = getNotNullString(wi.get(new CoreAnnotations.BeforeAnnotation().getClass()) as String);
 
-      String current = getNotNullString(wi.get(new CoreAnnotations.OriginalTextAnnotation().getClass()) as String);
-      if (tag!=prevTag) {
-        if (prevTag!=background && tag!=background) {
-          sb.print("</");
-          sb.print(prevTag);
-          sb.print('>');
+                String current = getNotNullString(wi.get(new CoreAnnotations.OriginalTextAnnotation().getClass()) as String);
+                if (tag != prevTag)
+                {
+                    if (prevTag != background && tag != background)
+                    {
+                        sb.print("</");
+                        sb.print(prevTag);
+                        sb.print('>');
 
-          sb.print(before);
+                        sb.print(before);
 
-          sb.print('<');
-          sb.print(tag);
+                        sb.print('<');
+                        sb.print(tag);
                         sb.print(" PROBABILITY=\"");
                         sb.print(getProb(tag, wordCount, cliqueTree));
-                        sb.print("\" ");                        
-          sb.print('>');
-    } else if (prevTag !=background) {
-          sb.print("</");
-          sb.print(prevTag);
-          sb.print('>');
-          sb.print(before);
-} else if (tag != background) {
-          sb.print(before);
-          sb.print('<');
-          sb.print(tag);
+                        sb.print("\" ");
+                        sb.print('>');
+                    }
+                    else if (prevTag != background)
+                    {
+                        sb.print("</");
+                        sb.print(prevTag);
+                        sb.print('>');
+                        sb.print(before);
+                    }
+                    else if (tag != background)
+                    {
+                        sb.print(before);
+                        sb.print('<');
+                        sb.print(tag);
                         sb.print(" PROBABILITY=\"");
                         sb.print(getProb(tag, wordCount, cliqueTree));
                         sb.print("\" ");
 
                         sb.print('>');
-        }
-      } else {
-        sb.print(before);
-      }
-      sb.print(current);
-String afterWS = getNotNullString(wi.get(new CoreAnnotations.AfterAnnotation().getClass()) as String);
+                    }
+                }
+                else
+                {
+                    sb.print(before);
+                }
+                sb.print(current);
+                String afterWS = getNotNullString(wi.get(new CoreAnnotations.AfterAnnotation().getClass()) as String);
 
-      if (tag!=background && !wordIter.hasNext()) {
-        sb.print("</");
-        sb.print(tag);
-        sb.print('>');
-prevTag = background;
-      } else {
-        prevTag = tag;
-      }
-      sb.print(afterWS);
+                if (tag != background && !wordIter.hasNext())
+                {
+                    sb.print("</");
+                    sb.print(tag);
+                    sb.print('>');
+                    prevTag = background;
+                }
+                else
+                {
+                    prevTag = tag;
+                }
+                sb.print(afterWS);
 
                 wordCount++;
-    }
-  }
+            }
+        }
 
 
         void ProcessPersonLocationOrganization(string masterShipID, XElement element, XElement destinationElement)
@@ -658,10 +743,10 @@ prevTag = background;
 
                     //var classifierResult = classifier.classifyWithInlineXML(textValue);                    
 
-                    var fileClassify = classifier.classify(textValue);
+                    var sentences = classifier.classify(textValue);
                     
                     var sb = new StringBuilder();
-                    for (var itr = fileClassify.iterator(); itr.hasNext();)
+                    for (var itr = sentences.iterator(); itr.hasNext();)
                     {                       
                         var sentence = itr.next() as java.util.List;
                         var cliqueTree = classifier.getCliqueTree(sentence);
@@ -669,52 +754,6 @@ prevTag = background;
                     }
 
                     var classifierResult = sb.ToString();
-
-                    /*var tokenizerFactory = PTBTokenizer.factory(new CoreLabelTokenFactory(), "");
-                    var sent2Reader = new java.io.StringReader(textValue);
-                    var rawWords = tokenizerFactory.getTokenizer(sent2Reader).tokenize();
-                                       
-
-                    var classifyList = classifier.classify(rawWords);
-
-                    var sb = new StringBuilder();
-                    printAnswersInlineXML(classifyList, sb);
-                    var possibleInlineXML = sb.ToString();
-
-                    var cliqueTree = classifier.getCliqueTree(classifyList);
-
-                    //Retrieves what the token was classified as. Woo! - Just match it up to the classIndex + cliqueTree and you get the probability.
-
-                    //? (classifyList.iterator().next() as CoreLabel).get(new CoreAnnotations.AnswerAnnotation().getClass())
-
-                    List<ClassifyProbabilities> probs = new List<ClassifyProbabilities>();
-
-                    for (int cliqueIndex = 0; cliqueIndex < cliqueTree.length(); cliqueIndex++)
-                    {
-
-                        var wi = classifyList.get(cliqueIndex) as CoreLabel;
-                        //(classifyList.iterator().next() as CoreLabel).get(new CoreAnnotations.AnswerAnnotation().getClass())
-                        String tag = getNotNullString(wi.get(new CoreAnnotations.AnswerAnnotation().getClass()) as String);
-                        String originalText = getNotNullString(wi.get(new CoreAnnotations.OriginalTextAnnotation().getClass()) as String);
-
-                        if (tag == "O")
-                        {
-                            continue;
-                        }
-
-                        for (var iter = classifier.classIndex.iterator(); iter.hasNext();)
-                        {
-                            var label = iter.next();
-                            int labelIndex = classifier.classIndex.indexOf(label);
-                            double prob = cliqueTree.prob(cliqueIndex, labelIndex);
-                            if (label as string == tag)
-                            {
-                                probs.Add(new ClassifyProbabilities() { Probability = prob, OriginalText = originalText, Classification = tag });
-                            }
-                          
-                        }
-                    }*/
-
 
 
                     var settings = new XmlReaderSettings
