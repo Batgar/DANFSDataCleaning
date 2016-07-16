@@ -22,12 +22,15 @@ namespace DANFS.PreProcessor
 
         string ROOT_PATH = @"C:\Users\Dan Edgar\Documents";
 
-        public void DoCreateLocationDatabase()
+       
+        public void DoFindShipAssociations()
         {
-
+            //Check to see if the element is an "i" element, and doesn't start with the current ship name.
+            //If it is, then it could be a link to a ship, we GUID it up, and then try to find a matching ship from the
+            //master ship dictionary.
         }
-        
-        public void DoCreateDateDatabase()
+
+        private SQLiteConnection CreateNewDateDatabase()
         {
             var dateDatabasePath = System.IO.Path.Combine(ROOT_PATH, @"shipdates.sqlite");
 
@@ -38,49 +41,104 @@ namespace DANFS.PreProcessor
             var dateConnection = new SQLiteConnection(string.Format("Data Source={0};Version=3;", dateDatabasePath));
             dateConnection.Open();
 
-            string createTableSql = "create table shipdate (name text, date_guid text, year text, month text, day text, preview text)";
+            string createTableSql = "create table shipdate (id text, date_guid text, year text, month text, day text, preview text, url text, title text, subtitle text)";
 
             SQLiteCommand createTableCommand = new SQLiteCommand(createTableSql, dateConnection);
             createTableCommand.ExecuteNonQuery();
 
-            var fileNames = Directory.GetFiles(System.IO.Path.Combine(ROOT_PATH, @"Ships"), "*.xml");
-            foreach (var fileName in fileNames)
+            return dateConnection;
+        }
+
+        private SQLiteConnection CreateNewAugmentedDatabase()
+        {
+            var pathToAugmentedDANFSDatabase = System.IO.Path.Combine(ROOT_PATH, "danfs-augmented.sqlite3");
+            File.Delete(pathToAugmentedDANFSDatabase);
+
+            SQLiteConnection.CreateFile(pathToAugmentedDANFSDatabase);
+
+            var augmentedConnection = new SQLiteConnection(string.Format("Data Source={0};Version=3;", pathToAugmentedDANFSDatabase));
+            augmentedConnection.Open();
+
+            string createTableSql = "create table danfs_ships (id text, url text, title text, subtitle text, history text)";
+
+            SQLiteCommand createTableCommand = new SQLiteCommand(createTableSql, augmentedConnection);
+            createTableCommand.ExecuteNonQuery();
+
+            return augmentedConnection;
+        }
+
+        private SQLiteConnection OpenExistingAugmentedDatabase()
+        {
+            var pathToAugmentedDANFSDatabase = System.IO.Path.Combine(ROOT_PATH, "danfs-augmented.sqlite3");
+           
+            var augmentedConnection = new SQLiteConnection(string.Format("Data Source={0};Version=3;", pathToAugmentedDANFSDatabase));
+            augmentedConnection.Open();
+
+            return augmentedConnection;
+        }
+
+        public void PostProcessDates(SQLiteDataReader reader, XDocument doc, SQLiteConnection dateConnection)
+        {
+
+            //Log the fileName as the ID of the ship.
+            //Search through the XML looking for
+            // - <date year="1795" month="August" day="15">15 August 1795</date>
+            // Add a UDID per date.
+            // Log the GUID, ID of ship, year, month, day, into SQLite.
+            // Then we should be able to query the SQLite DB by the above, find the relevant date in the XML, and print out the paragraph from the doc as needed.
+            //var doc = XDocument.Load(fileName);
+
+            using (var transaction = dateConnection.BeginTransaction())
             {
-                //Log the fileName as the ID of the ship.
-                //Search through the XML looking for
-                // - <date year="1795" month="August" day="15">15 August 1795</date>
-                // Add a UDID per date.
-                // Log the GUID, ID of ship, year, month, day, into SQLite.
-                // Then we should be able to query the SQLite DB by the above, find the relevant date in the XML, and print out the paragraph from the doc as needed.
-                var doc = XDocument.Load(fileName);
 
                 foreach (var date in doc.Descendants("date"))
                 {
                     var dateGuid = Guid.NewGuid();
                     date.Add(new XAttribute("date_guid", dateGuid.ToString()));
 
-                    SQLiteCommand insertCommand = new SQLiteCommand("insert into shipdate (name, date_guid, year, month, day, preview) values (@name, @date_guid, @year, @month, @day, @preview)", dateConnection);
+                    using (SQLiteCommand insertCommand = new SQLiteCommand("insert into shipdate (id, date_guid, year, month, day, preview, url, title, subtitle) values (@id, @date_guid, @year, @month, @day, @preview, @url , @title, @subtitle)", dateConnection))
+                    {
 
-                    insertCommand.Parameters.Add(new SQLiteParameter("@name", Path.GetFileNameWithoutExtension(fileName)));
-                    insertCommand.Parameters.Add(new SQLiteParameter("@date_guid", dateGuid.ToString()));
+                        insertCommand.Parameters.Add(new SQLiteParameter("@id", reader["id"]));
+                        insertCommand.Parameters.Add(new SQLiteParameter("@date_guid", dateGuid.ToString()));
 
-                    var year = date.Attribute("year") != null ?  date.Attribute("year").Value : string.Empty;
-                    insertCommand.Parameters.Add(new SQLiteParameter("@year", year));
+                        var year = date.Attribute("year") != null ? date.Attribute("year").Value : string.Empty;
+                        insertCommand.Parameters.Add(new SQLiteParameter("@year", year));
 
-                    var month = date.Attribute("month") != null ? date.Attribute("month").Value : string.Empty;
-                    insertCommand.Parameters.Add(new SQLiteParameter("@month", month));
+                        var month = date.Attribute("month") != null ? date.Attribute("month").Value : string.Empty;
+                        insertCommand.Parameters.Add(new SQLiteParameter("@month", month));
 
-                    var day = date.Attribute("day") != null ? date.Attribute("day").Value : string.Empty;
-                    insertCommand.Parameters.Add(new SQLiteParameter("@day", day));
+                        var day = date.Attribute("day") != null ? date.Attribute("day").Value : string.Empty;
+                        insertCommand.Parameters.Add(new SQLiteParameter("@day", day));
 
-                    var preview = GeneratePreview(date);
-                    insertCommand.Parameters.Add(new SQLiteParameter("@preview", preview));
+                        var preview = GeneratePreview(date);
+                        insertCommand.Parameters.Add(new SQLiteParameter("@preview", preview));
 
-                    insertCommand.ExecuteNonQuery();
+                        insertCommand.Parameters.Add(new SQLiteParameter("@url", reader["url"]));
+                        insertCommand.Parameters.Add(new SQLiteParameter("@title", reader["title"]));
+                        insertCommand.Parameters.Add(new SQLiteParameter("@subtitle", reader["subtitle"] != null ? reader["subtitle"] : string.Empty));
+
+                        insertCommand.ExecuteNonQuery();
+                    }
                 }
 
-                //Save the changed dates as we added a date_guid to every date in the doc.
-                doc.Save(fileName);
+                transaction.Commit();
+            }
+        }
+
+        private void AddToAugmented(SQLiteDataReader reader, XDocument augmentedDoc, SQLiteConnection augmentedConnection)
+        {
+            //Also lay down the changed XML into a new danfs-augmented.sqlite3 database.
+            using (SQLiteCommand insertCommand = new SQLiteCommand("insert into danfs_ships (id, url, title, subtitle, history) values (@id, @url, @title, @subtitle, @history)", augmentedConnection))
+            {
+
+                insertCommand.Parameters.Add(new SQLiteParameter("@id", reader["id"]));
+                insertCommand.Parameters.Add(new SQLiteParameter("@url", reader["url"]));
+                insertCommand.Parameters.Add(new SQLiteParameter("@title", reader["title"]));
+                insertCommand.Parameters.Add(new SQLiteParameter("@subtitle", reader["subtitle"] != null ? reader["subtitle"] : string.Empty));
+                insertCommand.Parameters.Add(new SQLiteParameter("@history", augmentedDoc.ToString()));
+
+                insertCommand.ExecuteNonQuery();
             }
         }
 
@@ -99,7 +157,12 @@ namespace DANFS.PreProcessor
         public void Process()
         {
 
+
+
             System.Diagnostics.Trace.Listeners.Add(new PreProcessTracing(Path.Combine(ROOT_PATH, "DANFSPreProcessLog.txt")));
+
+            DoNamedEntityRecognition(false);
+            return;
 
             //MakeLocationDictionary();
             //return;
@@ -119,6 +182,97 @@ namespace DANFS.PreProcessor
             int missingShipRegistries = 0;
             totalDates = 0;
 
+          
+
+
+           
+
+            using (var dateConnection = CreateNewDateDatabase())
+            //using (var augmentedConnection = CreateNewAugmentedDatabase())
+            {
+                var reader = command.ExecuteReader();
+
+                long totalMilliseconds = 0;
+
+                //Generates all files and inserts dates.
+                while (reader.Read())
+                {
+                    var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+                    //try
+                    {
+                        var doc = XDocument.Parse("<root>" + (string)reader["history"] + "</root>");
+
+
+                        var processedValue = doc.Root.Attribute("date");
+
+                        if (processedValue != null && processedValue.Value == "true")
+                        {
+                            continue;
+                        }
+
+                       
+
+                        XElement rootElement = new XElement("root");
+
+                        rootElement.Add(new XAttribute("source_title", reader["title"]));
+                        rootElement.Add(new XAttribute("source_subtitle", reader["subtitle"] == null ? string.Empty : reader["subtitle"]));
+                        rootElement.Add(new XAttribute("source_url", reader["url"]));
+                        rootElement.Add(new XAttribute("source_id", reader["id"]));
+
+                        lastYear = string.Empty;
+
+                        shipRegistryElement = null;
+
+                        noYearDateElements.Clear();
+
+                        ProcessElement(reader["id"] as String, doc.Root, rootElement);
+
+                        var augmentedDoc = new XDocument();
+                        augmentedDoc.Add(rootElement);
+
+                        if (shipRegistryElement == null)
+                        {
+                            System.Diagnostics.Trace.WriteLine($"No ship registry for {reader["id"]}", "INFO");
+                            missingShipRegistries++;
+                        }
+
+                        //Throw in our flag so we can key off later if we decide to do processing differently.
+
+
+                        PostProcessDates(reader, augmentedDoc, dateConnection);
+
+                        rootElement.Add(new XAttribute("date", "true"));
+
+                        //AddToAugmented(reader, augmentedDoc, augmentedConnection);
+
+                        var shipFileName = System.IO.Path.Combine(ROOT_PATH, $@"Ships\{reader["id"]}.xml");
+                        augmentedDoc.Save(shipFileName);
+
+                        totalShipCount++;
+
+                    }
+                    stopwatch.Stop();
+
+                    totalMilliseconds += stopwatch.ElapsedMilliseconds;
+
+                    System.Diagnostics.Trace.WriteLine($"Current Estimated Initial Processing Time: {totalMilliseconds / totalShipCount * 11000 / 1000 / 3600} hours");
+
+                    /*catch (Exception e)
+                    {
+                        System.Diagnostics.Trace.WriteLine($"Error while processing ship {reader["id"]} - {e.Message}", "ERROR");
+                    }*/
+                }
+            }
+
+            DoNamedEntityRecognition(true);   
+
+            System.Diagnostics.Trace.WriteLine($"Total Ships: {totalShipCount} -- Missing Registries: {missingShipRegistries} - Total Dates Logged: {totalDates}", "INFO");
+
+        }
+
+        private void DoNamedEntityRecognition(bool startNew)
+        {
+
             // Path to the folder with classifiers models
             var jarRoot = @"C:\Users\Dan Edgar\Downloads\stanford-ner-2015-12-09\stanford-ner-2015-12-09";
             var classifiersDirecrory = System.IO.Path.Combine(jarRoot, @"classifiers");
@@ -127,77 +281,80 @@ namespace DANFS.PreProcessor
             classifier = CRFClassifier.getClassifierNoExceptions(
                 classifiersDirecrory + @"\english.all.3class.distsim.crf.ser.gz");
 
+            var pathToMainDANFSDatabase = System.IO.Path.Combine(ROOT_PATH, "danfs.sqlite3");
+            var connection = new SQLiteConnection(string.Format("Data Source={0};Version=3", pathToMainDANFSDatabase));
+            connection.Open();
+            var command = new SQLiteCommand("select * from danfs_ships", connection);
             var reader = command.ExecuteReader();
 
-            //Generates all files and inserts dates.
-            while (reader.Read())
+            SQLiteConnection augmentedConnection = null;
+
+            if (startNew)
             {
-                try
+                augmentedConnection = CreateNewAugmentedDatabase();
+            }
+            else
+            {
+                augmentedConnection = OpenExistingAugmentedDatabase();
+            }
+
+            using (augmentedConnection)
+            {
+                long totalMilliseconds = 0;
+                int totalShipCount = 0;
+
+                while (reader.Read())
                 {
-                    var doc = XDocument.Parse("<root>" + (string)reader["history"] + "</root>");
+                    var currentShipXMLFilePath = System.IO.Path.Combine(ROOT_PATH, $@"Ships\{reader["id"] as string}.xml");
 
+                    var doc = XDocument.Load(currentShipXMLFilePath);
 
-                    var processedValue = doc.Root.Attribute("date");
+                    var processedValue = doc.Root.Attribute("personLocationOrganization");
+
 
                     if (processedValue != null && processedValue.Value == "true")
                     {
+                        System.Diagnostics.Trace.WriteLine($"Skipping NER - {reader["id"]}");
                         continue;
                     }
 
-                    doc.Root.Add(new XAttribute("source_title", reader["title"]));
-                    doc.Root.Add(new XAttribute("source_subtitle", reader["subtitle"] == null ? string.Empty : reader["subtitle"]));
-                    doc.Root.Add(new XAttribute("source_uri", reader["url"]));
-                    doc.Root.Add(new XAttribute("source_id", reader["id"]));
+                    var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+                   
+
+                   
 
                     XElement rootElement = new XElement("root");
 
-                    lastYear = string.Empty;
+                    //Copy all existing root attributes to the new doc.
+                    foreach (var attribute in doc.Root.Attributes())
+                    {
+                        rootElement.Add(attribute);
+                    }
 
-                    shipRegistryElement = null;
+                   
 
-                    noYearDateElements.Clear();
+                    ProcessPersonLocationOrganization(reader["id"] as string, doc.Root, rootElement);
 
-                    ProcessElement(reader["id"] as String, doc.Root, rootElement);
+                    //Throw in our flag so we don't double process!
+                    rootElement.Add(new XAttribute("personLocationOrganization", "true"));
 
                     var augmentedDoc = new XDocument();
                     augmentedDoc.Add(rootElement);
+                    augmentedDoc.Save(currentShipXMLFilePath);
 
-                    if (shipRegistryElement == null)
-                    {
-                        System.Diagnostics.Trace.WriteLine($"No ship registry for {reader["id"]}", "INFO");
-                        missingShipRegistries++;
-                    }
+                    AddToAugmented(reader, augmentedDoc, augmentedConnection);
 
-                    //Throw in our flag so we don't double process!
-                    rootElement.Add(new XAttribute("date", "true"));
+                    stopwatch.Stop();
 
-                    var shipFileName = System.IO.Path.Combine(ROOT_PATH, $@"Ships\{reader["id"]}.xml");
-
-                    augmentedDoc.Save(shipFileName);
-
-                    //TODO: Start processing the NER stuff....
-
-
+                    totalMilliseconds += stopwatch.ElapsedMilliseconds;
                     totalShipCount++;
 
-                }
-                catch (Exception e)
-                {
-                    System.Diagnostics.Trace.WriteLine($"Error while processing ship {reader["id"]} - {e.Message}", "ERROR");
+                    System.Diagnostics.Trace.WriteLine($"Current Estimated Classification Processing Time: {totalMilliseconds / totalShipCount * 11000 / 1000 / 3600} hours");
                 }
             }
 
-            //Now pass through it a second time, this time we are going to put in Person, Location, Organization information.
-            DoNamedEntityRecognition();
-
-            System.Diagnostics.Trace.WriteLine($"Total Ships: {totalShipCount} -- Missing Registries: {missingShipRegistries} - Total Dates Logged: {totalDates}", "INFO");
-
-        }
-
-        private void DoNamedEntityRecognition()
-        {
-            var fileNames = Directory.GetFiles(System.IO.Path.Combine(ROOT_PATH, @"Ships"), "*.xml");
-            var fileCount = fileNames.Length;
+            /*var fileCount = fileNames.Length;
             {
                 bool keepGoing = true;
                 int chunkSize = 500;
@@ -229,7 +386,7 @@ namespace DANFS.PreProcessor
 
                 } while (keepGoing);
 
-            }
+            }*/
         }
 
         private void CreateManifest(SQLiteDataReader manifestReader)
@@ -275,6 +432,12 @@ namespace DANFS.PreProcessor
                     XElement rootElement = new XElement("root");
 
                     var processedValue = doc.Root.Attribute("personLocationOrganization");
+
+                    //Copy all existing root attributes to the new doc.
+                    foreach (var attribute in doc.Root.Attributes())
+                    {
+                        rootElement.Add(attribute);
+                    }
 
                     if (processedValue != null && processedValue.Value == "true")
                     {
@@ -534,6 +697,11 @@ namespace DANFS.PreProcessor
             SQLiteCommand createTableCommand = new SQLiteCommand(createTableSql, locationConnection);
             createTableCommand.ExecuteNonQuery();
 
+            string createShipLocationDateTable = "create table shipLocationDate (shipID text, locationname text, startdate text, enddate text, locationguid text)";
+            SQLiteCommand createTableCommand2 = new SQLiteCommand(createShipLocationDateTable, locationConnection);
+            createTableCommand2.ExecuteNonQuery();
+
+
             List<string> uniqueLocations = new List<string>();
 
             int shipCount = 0;
@@ -549,17 +717,53 @@ namespace DANFS.PreProcessor
                 uniqueLocations.AddRange(locations);
 
 
-                /*var shipID = Path.GetFileNameWithoutExtension(file);
+                var shipID = Path.GetFileNameWithoutExtension(file);
 
-                foreach (var location in locations)
+                using (var transaction = locationConnection.BeginTransaction())
                 {
-                    var closestPreviousDateElement = location.ElementsBeforeSelf("date")?.FirstOrDefault();
-                    var closestNextDateElement = location.ElementsAfterSelf("date")?.FirstOrDefault();
 
-                    //We have a location, a ship ID, and possible associated dates.
+                    foreach (var location in doc.Root.Descendants("LOCATION"))
+                    {
+                        var closestPreviousDateElement = location.ElementsBeforeSelf("date")?.FirstOrDefault();
+                        var closestNextDateElement = location.ElementsAfterSelf("date")?.FirstOrDefault();
 
+                        DateTime beginDate = DateTime.MinValue;
+                        DateTime endDate = DateTime.MinValue;
 
-                }*/
+                        //We have a location, a ship ID, and possible associated dates.
+                        //Log the location Guid, doc id, location name, before date, end date, 
+                        var prevYear = closestPreviousDateElement.Attribute("year");
+                        var prevMonth = closestPreviousDateElement.Attribute("month");
+                        var prevDay = closestPreviousDateElement.Attribute("day");
+                        if (prevYear != null && prevMonth != null && prevDay != null)
+                        {
+                            beginDate = DateTime.Parse($"{prevMonth.Value} {prevDay.Value},{prevYear.Value}");
+                        }
+
+                        var nextYear = closestPreviousDateElement.Attribute("year");
+                        var nextMonth = closestPreviousDateElement.Attribute("month");
+                        var nextDay = closestPreviousDateElement.Attribute("dat");
+                        if (nextYear != null && nextMonth != null && nextDay != null)
+                        {
+                            endDate = DateTime.Parse($"{nextMonth.Value} {nextDay.Value},{nextYear.Value}");
+                        }
+
+                        if (beginDate != DateTime.MinValue &&
+                            endDate != DateTime.MinValue)
+                        {
+                            SQLiteCommand insertCommand = new SQLiteCommand("insert into shipLocationDate (shipID, locationname, startdate, enddate, locationguid) values (@shipID, @locationname, @startdate, @enddate, @locationguid)", locationConnection);
+                            insertCommand.Parameters.Add(new SQLiteParameter("@shipID", shipID));
+                            insertCommand.Parameters.Add(new SQLiteParameter("@locationname", location));
+                            insertCommand.Parameters.Add(new SQLiteParameter("@startdate", beginDate.ToString()));
+                            insertCommand.Parameters.Add(new SQLiteParameter("@enddate", endDate.ToString()));
+                            insertCommand.Parameters.Add(new SQLiteParameter("@locationguid", location.Attribute("location_guid").Value));
+
+                            insertCommand.ExecuteNonQuery();
+                        }
+
+                    }
+                    transaction.Commit();
+                }
 
                 shipCount++;
             }
@@ -885,10 +1089,14 @@ namespace DANFS.PreProcessor
                         }
                     }
 
-                 
-                       
-                    
-
+                    //All locations have been aggregated. Time to 'GUID' them up so we can link to them within the document later.
+                    foreach (var locationElement in destinationElement.Elements("LOCATION"))
+                    {
+                        if (locationElement.Attribute("location_guid") == null)
+                        {
+                            locationElement.Add(new XAttribute("location_guid", Guid.NewGuid().ToString()));
+                        }
+                    }
                 }
                 else if (node is XElement)
                 {
@@ -914,136 +1122,7 @@ namespace DANFS.PreProcessor
                 {
                     var textValue = (node as XText).Value;
 
-                    var matchedDates = dateRegex.Matches(textValue);
-
-
-                    if (matchedDates != null && matchedDates.Count > 0)
-                    {
-                        var previousMatch = 0;
-                        
-
-                        foreach (Match match in matchedDates)
-                        {
-                            totalDates++;
-
-                            //First add the string before the matched date to the paragraph XML.
-                            destinationElement.Add(new XText(textValue.Substring(previousMatch, match.Index - previousMatch)));
-
-                            //Now add the parsed date as a new XElement to the above paragraph.
-
-                            XElement dateElement = new XElement("date");
-                            dateElement.Add(new XText(match.Value));
-
-                            var preprocessedMatches = match.Groups.Cast<Group>().Where(o => !string.IsNullOrEmpty(o.Value.Trim())).ToArray();
-
-                            if (preprocessedMatches.Length == 5)
-                            {
-                                //2 options here:
-                                //one is 21 May 1901 -- Which means that the preprocessedMatches[2] is an integer.
-                                //Other is a seasonal date fall of 1867
-                                int day = Int32.MinValue;
-                                if (Int32.TryParse(preprocessedMatches[2].Value.Trim(), out day))
-                                {
-
-
-                                    //Group 1 == Day in Month.
-                                    //Group 2 == Month value.
-                                    //Group 3 == Year value.
-                                    SetLastYear(masterShipID, preprocessedMatches[4].Value.Trim());
-                                    dateElement.Add(new XAttribute("year", preprocessedMatches[4].Value.Trim()));
-                                    dateElement.Add(new XAttribute("month", preprocessedMatches[3].Value.Trim()));
-                                    dateElement.Add(new XAttribute("day", preprocessedMatches[2].Value.Trim()));
-                                }
-                                else
-                                {
-                                    SetLastYear(masterShipID, preprocessedMatches[4].Value.Trim());
-                                    dateElement.Add(new XAttribute("year", lastYear));
-                                    dateElement.Add(new XAttribute("season", preprocessedMatches[2].Value.Trim()));
-                                    //TODO: Process season into a default month.
-                                }
-                            }
-                            else if (preprocessedMatches.Length == 4)
-                            {
-                                if (preprocessedMatches[2].Value.Trim() == "in")
-                                {
-                                    SetLastYear(masterShipID, preprocessedMatches[3].Value.Trim());
-                                    dateElement.Add(new XAttribute("year", lastYear));
-                                }
-                                else
-                                {
-                                    //This could have the value 'in 1600' or 'June 1865' or '12 August'
-                                    //Check to see if Groups[1] is an integer. If it is, then write out day / month.
-                                    int possibleDay = Int32.MinValue;
-                                    if (Int32.TryParse(preprocessedMatches[2].Value.Trim(), out possibleDay))
-                                    {
-                                        dateElement.Add(new XAttribute("month", preprocessedMatches[3].Value.Trim()));
-                                        dateElement.Add(new XAttribute("day", preprocessedMatches[2].Value.Trim()));
-                                        if (!string.IsNullOrEmpty(lastYear))
-                                        {
-                                            dateElement.Add(new XAttribute("year", lastYear));
-                                        }
-                                        else
-                                        {
-                                            noYearDateElements.Add(dateElement);
-                                            System.Diagnostics.Trace.WriteLine($"No year present for partial date - {masterShipID}", "INFO");
-                                            dateElement.Add(new XAttribute("invalid-year-value", "true"));
-                                        }
-                                    }
-                                    else
-                                    {
-                                        SetLastYear(masterShipID, preprocessedMatches[3].Value.Trim());
-                                        //Otherwise write out month / year
-                                        dateElement.Add(new XAttribute("year", preprocessedMatches[3].Value.Trim()));
-                                        dateElement.Add(new XAttribute("month", preprocessedMatches[2].Value.Trim()));
-                                    }
-                                }
-                            }
-                            else if (preprocessedMatches.Length == 3)
-                            {
-                                //If value is not an integer, then it is a month.
-                                int possibleYear = Int32.MinValue;
-                                if (!Int32.TryParse(preprocessedMatches[2].Value.Trim(), out possibleYear))
-                                {
-                                    dateElement.Add(new XAttribute("month", preprocessedMatches[2].Value.Trim()));
-
-                                    if (!string.IsNullOrEmpty(lastYear))
-                                    {
-                                        dateElement.Add(new XAttribute("year", lastYear));
-                                    }
-                                    else
-                                    {
-                                        noYearDateElements.Add(dateElement);
-                                        System.Diagnostics.Trace.WriteLine($"No year present for partial date - {masterShipID}", "INFO");
-                                        dateElement.Add(new XAttribute("invalid-year-value", "true"));
-                                    }
-                                }
-                                else
-                                {
-                                    //Is invalid.
-                                    System.Diagnostics.Trace.WriteLine($"Date Is Invalid - {masterShipID}", "INFO");
-                                    dateElement.Add(new XAttribute("invalid-one-value", "true"));
-                                }
-                            }
-                            else
-                            {
-                                //Is invalid.
-                                System.Diagnostics.Trace.WriteLine($"Is Invalid - 2 - {masterShipID}", "INFO");
-                                dateElement.Add(new XAttribute("invalid", "true"));
-                            }
-
-                            //TODO: Put the broken out date parts into the XDocument.
-                            destinationElement.Add(dateElement);
-
-                            previousMatch = match.Index + match.Length;
-                        }
-
-                        //Add any trailing text from the end of the last match....
-                        destinationElement.Add(new XText(textValue.Substring(previousMatch, textValue.Length - previousMatch)));
-                    }
-                    else
-                    {
-                        destinationElement.Add(node);
-                    }
+                    DoTextDateProcessing(masterShipID, destinationElement, node, textValue);
                 }
                 else if (node is XElement)
                 {
@@ -1053,6 +1132,8 @@ namespace DANFS.PreProcessor
                     {
                         newDestinationElement.Add(attribute);
                     }
+
+
 
                     //Check the source element and see if it is a ship stats element. If it is, mark it because we will want to parse it, and use it as a marker to decide
                     //where ships history begins.
@@ -1083,6 +1164,140 @@ namespace DANFS.PreProcessor
                     destinationElement.Add(newDestinationElement);
                     ProcessElement(masterShipID, node as XElement, newDestinationElement);
                 }
+            }
+        }
+
+        private void DoTextDateProcessing(string masterShipID, XElement destinationElement, XNode node, string textValue)
+        {
+            var matchedDates = dateRegex.Matches(textValue);
+
+
+            if (matchedDates != null && matchedDates.Count > 0)
+            {
+                var previousMatch = 0;
+
+
+                foreach (Match match in matchedDates)
+                {
+                    totalDates++;
+
+                    //First add the string before the matched date to the paragraph XML.
+                    destinationElement.Add(new XText(textValue.Substring(previousMatch, match.Index - previousMatch)));
+
+                    //Now add the parsed date as a new XElement to the above paragraph.
+
+                    XElement dateElement = new XElement("date");
+                    dateElement.Add(new XText(match.Value));
+
+                    var preprocessedMatches = match.Groups.Cast<Group>().Where(o => !string.IsNullOrEmpty(o.Value.Trim())).ToArray();
+
+                    if (preprocessedMatches.Length == 5)
+                    {
+                        //2 options here:
+                        //one is 21 May 1901 -- Which means that the preprocessedMatches[2] is an integer.
+                        //Other is a seasonal date fall of 1867
+                        int day = Int32.MinValue;
+                        if (Int32.TryParse(preprocessedMatches[2].Value.Trim(), out day))
+                        {
+
+
+                            //Group 1 == Day in Month.
+                            //Group 2 == Month value.
+                            //Group 3 == Year value.
+                            SetLastYear(masterShipID, preprocessedMatches[4].Value.Trim());
+                            dateElement.Add(new XAttribute("year", preprocessedMatches[4].Value.Trim()));
+                            dateElement.Add(new XAttribute("month", preprocessedMatches[3].Value.Trim()));
+                            dateElement.Add(new XAttribute("day", preprocessedMatches[2].Value.Trim()));
+                        }
+                        else
+                        {
+                            SetLastYear(masterShipID, preprocessedMatches[4].Value.Trim());
+                            dateElement.Add(new XAttribute("year", lastYear));
+                            dateElement.Add(new XAttribute("season", preprocessedMatches[2].Value.Trim()));
+                            //TODO: Process season into a default month.
+                        }
+                    }
+                    else if (preprocessedMatches.Length == 4)
+                    {
+                        if (preprocessedMatches[2].Value.Trim() == "in")
+                        {
+                            SetLastYear(masterShipID, preprocessedMatches[3].Value.Trim());
+                            dateElement.Add(new XAttribute("year", lastYear));
+                        }
+                        else
+                        {
+                            //This could have the value 'in 1600' or 'June 1865' or '12 August'
+                            //Check to see if Groups[1] is an integer. If it is, then write out day / month.
+                            int possibleDay = Int32.MinValue;
+                            if (Int32.TryParse(preprocessedMatches[2].Value.Trim(), out possibleDay))
+                            {
+                                dateElement.Add(new XAttribute("month", preprocessedMatches[3].Value.Trim()));
+                                dateElement.Add(new XAttribute("day", preprocessedMatches[2].Value.Trim()));
+                                if (!string.IsNullOrEmpty(lastYear))
+                                {
+                                    dateElement.Add(new XAttribute("year", lastYear));
+                                }
+                                else
+                                {
+                                    noYearDateElements.Add(dateElement);
+                                    System.Diagnostics.Trace.WriteLine($"No year present for partial date - {masterShipID}", "INFO");
+                                    dateElement.Add(new XAttribute("invalid-year-value", "true"));
+                                }
+                            }
+                            else
+                            {
+                                SetLastYear(masterShipID, preprocessedMatches[3].Value.Trim());
+                                //Otherwise write out month / year
+                                dateElement.Add(new XAttribute("year", preprocessedMatches[3].Value.Trim()));
+                                dateElement.Add(new XAttribute("month", preprocessedMatches[2].Value.Trim()));
+                            }
+                        }
+                    }
+                    else if (preprocessedMatches.Length == 3)
+                    {
+                        //If value is not an integer, then it is a month.
+                        int possibleYear = Int32.MinValue;
+                        if (!Int32.TryParse(preprocessedMatches[2].Value.Trim(), out possibleYear))
+                        {
+                            dateElement.Add(new XAttribute("month", preprocessedMatches[2].Value.Trim()));
+
+                            if (!string.IsNullOrEmpty(lastYear))
+                            {
+                                dateElement.Add(new XAttribute("year", lastYear));
+                            }
+                            else
+                            {
+                                noYearDateElements.Add(dateElement);
+                                System.Diagnostics.Trace.WriteLine($"No year present for partial date - {masterShipID}", "INFO");
+                                dateElement.Add(new XAttribute("invalid-year-value", "true"));
+                            }
+                        }
+                        else
+                        {
+                            //Is invalid.
+                            System.Diagnostics.Trace.WriteLine($"Date Is Invalid - {masterShipID}", "INFO");
+                            dateElement.Add(new XAttribute("invalid-one-value", "true"));
+                        }
+                    }
+                    else
+                    {
+                        //Is invalid.
+                        System.Diagnostics.Trace.WriteLine($"Is Invalid - 2 - {masterShipID}", "INFO");
+                        dateElement.Add(new XAttribute("invalid", "true"));
+                    }
+
+                    //TODO: Put the broken out date parts into the XDocument.
+                    destinationElement.Add(dateElement);
+
+                    previousMatch = match.Index + match.Length;
+                }
+
+                //Add any trailing text from the end of the last match....
+                destinationElement.Add(new XText(textValue.Substring(previousMatch, textValue.Length - previousMatch)));
+            }
+            else
+            {
+                destinationElement.Add(node);
             }
         }
 

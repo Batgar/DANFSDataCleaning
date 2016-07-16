@@ -9,7 +9,6 @@
     <Grid>
         <StackPanel>
             <Button Click="Button_Click">Preprocess</Button>
-            <Button Click="Button_Click_1">Create Date Associations</Button>
         </StackPanel>
     </Grid>
 </Window>

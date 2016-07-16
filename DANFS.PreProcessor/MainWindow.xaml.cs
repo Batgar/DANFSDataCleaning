@@ -31,10 +31,6 @@ namespace DANFS.PreProcessor
             preprocessor.Process();
         }
 
-        private void Button_Click_1(object sender, RoutedEventArgs e)
-        {
-            var preprocessor = new PreprocessorMain();
-            preprocessor.DoCreateDateDatabase();
-        }
+       
     }
 }
