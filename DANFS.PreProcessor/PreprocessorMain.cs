@@ -156,16 +156,17 @@ namespace DANFS.PreProcessor
 
         public void Process()
         {
-
-
-
+            
             System.Diagnostics.Trace.Listeners.Add(new PreProcessTracing(Path.Combine(ROOT_PATH, "DANFSPreProcessLog.txt")));
 
-            DoNamedEntityRecognition(false);
+            //DoNamedEntityRecognition(false);
+            //return;
+
+            MakeLocationDictionary();
             return;
 
-            //MakeLocationDictionary();
-            //return;
+            GeocodeUniqueLocations();
+            return;
 
             //TryGetRanksOfPeople();
             //return;
@@ -680,9 +681,8 @@ namespace DANFS.PreProcessor
             File.WriteAllLines(System.IO.Path.Combine(ROOT_PATH, @"ShipsStats\AllPossibleRanks.txt"), possibleRanks.ToArray());
         }
 
-        private async void MakeLocationDictionary()
+        private SQLiteConnection CreateNewLocationDatabase()
         {
-
             var locationDatabasePath = System.IO.Path.Combine(ROOT_PATH, @"shiplocations.sqlite");
 
             File.Delete(locationDatabasePath);
@@ -701,127 +701,355 @@ namespace DANFS.PreProcessor
             SQLiteCommand createTableCommand2 = new SQLiteCommand(createShipLocationDateTable, locationConnection);
             createTableCommand2.ExecuteNonQuery();
 
+            return locationConnection;
+        }
 
-            List<string> uniqueLocations = new List<string>();
+        SQLiteConnection OpenExistingLocationDatabase(bool recreateShipLocationDateTable)
+        {
+            var locationDatabasePath = System.IO.Path.Combine(ROOT_PATH, @"shiplocations.sqlite");
 
-            int shipCount = 0;
+            var locationConnection = new SQLiteConnection(string.Format("Data Source={0};Version=3;", locationDatabasePath));
+            locationConnection.Open();
 
-            //Now we will produce a location dictionary from all locations, and dump the JSON.
-            foreach (var file in Directory.GetFiles(System.IO.Path.Combine(ROOT_PATH, @"Ships"), "*.xml"))
+            if (recreateShipLocationDateTable)
             {
-                var doc = XDocument.Load(file);
-
-                //TODO: Only do this for now to get the master location list, skip anything in an italics node due to ship name formatting (i.e. New Jersey - Battleship)
-                var locations = doc.Root.Descendants("LOCATION").Where(e => e.Parent.Name != "i" && !uniqueLocations.Contains(e.Value)).Select(e => e.Value).Distinct();
-
-                uniqueLocations.AddRange(locations);
-
-
-                var shipID = Path.GetFileNameWithoutExtension(file);
-
-                using (var transaction = locationConnection.BeginTransaction())
+                try
+                {
+                    string dropShipLocationDateTable = "drop table shipLocationDate";
+                    SQLiteCommand dropShipLocationDateTableCommand = new SQLiteCommand(dropShipLocationDateTable, locationConnection);
+                    dropShipLocationDateTableCommand.ExecuteNonQuery();
+                }
+                catch
                 {
 
-                    foreach (var location in doc.Root.Descendants("LOCATION"))
-                    {
-                        var closestPreviousDateElement = location.ElementsBeforeSelf("date")?.FirstOrDefault();
-                        var closestNextDateElement = location.ElementsAfterSelf("date")?.FirstOrDefault();
-
-                        DateTime beginDate = DateTime.MinValue;
-                        DateTime endDate = DateTime.MinValue;
-
-                        //We have a location, a ship ID, and possible associated dates.
-                        //Log the location Guid, doc id, location name, before date, end date, 
-                        var prevYear = closestPreviousDateElement.Attribute("year");
-                        var prevMonth = closestPreviousDateElement.Attribute("month");
-                        var prevDay = closestPreviousDateElement.Attribute("day");
-                        if (prevYear != null && prevMonth != null && prevDay != null)
-                        {
-                            beginDate = DateTime.Parse($"{prevMonth.Value} {prevDay.Value},{prevYear.Value}");
-                        }
-
-                        var nextYear = closestPreviousDateElement.Attribute("year");
-                        var nextMonth = closestPreviousDateElement.Attribute("month");
-                        var nextDay = closestPreviousDateElement.Attribute("dat");
-                        if (nextYear != null && nextMonth != null && nextDay != null)
-                        {
-                            endDate = DateTime.Parse($"{nextMonth.Value} {nextDay.Value},{nextYear.Value}");
-                        }
-
-                        if (beginDate != DateTime.MinValue &&
-                            endDate != DateTime.MinValue)
-                        {
-                            SQLiteCommand insertCommand = new SQLiteCommand("insert into shipLocationDate (shipID, locationname, startdate, enddate, locationguid) values (@shipID, @locationname, @startdate, @enddate, @locationguid)", locationConnection);
-                            insertCommand.Parameters.Add(new SQLiteParameter("@shipID", shipID));
-                            insertCommand.Parameters.Add(new SQLiteParameter("@locationname", location));
-                            insertCommand.Parameters.Add(new SQLiteParameter("@startdate", beginDate.ToString()));
-                            insertCommand.Parameters.Add(new SQLiteParameter("@enddate", endDate.ToString()));
-                            insertCommand.Parameters.Add(new SQLiteParameter("@locationguid", location.Attribute("location_guid").Value));
-
-                            insertCommand.ExecuteNonQuery();
-                        }
-
-                    }
-                    transaction.Commit();
                 }
 
-                shipCount++;
+                string createShipLocationDateTable = "create table shipLocationDate (shipID text, locationname text, startdate text, enddate text, locationguid text)";
+                SQLiteCommand createTableCommand2 = new SQLiteCommand(createShipLocationDateTable, locationConnection);
+                createTableCommand2.ExecuteNonQuery();
             }
+            return locationConnection;
+        }
+
+        private async void MakeLocationDictionary()
+        {
+
+            using (var locationConnection = OpenExistingLocationDatabase(true))
+            {
+
+                List<string> uniqueLocations = new List<string>();
+
+                int shipCount = 0;
+
+                //Now we will produce a location dictionary from all locations, and dump the JSON.
+                foreach (var file in Directory.GetFiles(System.IO.Path.Combine(ROOT_PATH, @"Ships"), "*.xml"))
+                {
+                    var doc = XDocument.Load(file);
+
+                    //TODO: Only do this for now to get the master location list, skip anything in an italics node due to ship name formatting (i.e. New Jersey - Battleship)
+                    var locations = doc.Root.Descendants("LOCATION").Where(e => e.Parent.Name != "i" && !uniqueLocations.Contains(e.Value)).Select(e => e.Value).Distinct();
+
+                    uniqueLocations.AddRange(locations);
 
 
-            System.Diagnostics.Trace.WriteLine($"There are {uniqueLocations.Count} unique locations across {shipCount} ships", "INFO");
+                    var shipID = Path.GetFileNameWithoutExtension(file);
+
+                    using (var transaction = locationConnection.BeginTransaction())
+                    {
+
+                        foreach (var location in doc.Root.Descendants("LOCATION"))
+                        {
+                            var closestPreviousDateElement = location.ElementsBeforeSelf("date")?.LastOrDefault();
+                            var closestNextDateElement = location.ElementsAfterSelf("date")?.FirstOrDefault();
+
+                            DateTime beginDate = DateTime.MinValue;
+                            DateTime endDate = DateTime.MinValue;
+
+                            if (closestPreviousDateElement != null)
+                            {
+                                //We have a location, a ship ID, and possible associated dates.
+                                //Log the location Guid, doc id, location name, before date, end date, 
+                                var prevYear = closestPreviousDateElement.Attribute("year");
+                                var prevMonth = closestPreviousDateElement.Attribute("month");
+                                var prevDay = closestPreviousDateElement.Attribute("day");
+
+                                if (prevMonth != null && prevMonth.Value == "November" &&
+                                   prevDay != null && Convert.ToInt32(prevDay.Value) > 30)
+                                {
+                                    prevDay = new XAttribute("day", "30");
+                                }
+
+                                if (prevMonth != null && prevMonth.Value == "February" &&
+                                  prevDay != null && Convert.ToInt32(prevDay.Value) > 28)
+                                {
+                                    prevDay = new XAttribute("day", "28");
+                                }
+
+                                if (prevMonth != null && prevMonth.Value == "June" &&
+                                  prevDay != null && Convert.ToInt32(prevDay.Value) > 30)
+                                {
+                                    prevDay = new XAttribute("day", "30");
+                                }
 
 
-            //Create a SQLite 3 DB table and put all the locations into it. Look them up using the Google Maps API, try to get Lat / Long.
-            //ONly allowed 2,500 per day, so get 2,500 and see what happens?
+                                if (prevMonth != null && prevMonth.Value == "April" &&
+                                  prevDay != null && Convert.ToInt32(prevDay.Value) > 30)
+                                {
+                                    prevDay = new XAttribute("day", "30");
+                                }
+
+                                if (prevMonth != null && prevMonth.Value == "September" &&
+                                prevDay != null && Convert.ToInt32(prevDay.Value) > 30)
+                                {
+                                    prevDay = new XAttribute("day", "30");
+                                }
+
+                                if (prevMonth != null && prevMonth.Value == "May" &&
+                              prevDay != null && Convert.ToInt32(prevDay.Value) > 30)
+                                {
+                                    prevDay = new XAttribute("day", "30");
+                                }
+
+                                if (prevMonth != null && prevMonth.Value == "August" &&
+                              prevDay != null && Convert.ToInt32(prevDay.Value) > 31)
+                                {
+                                    prevDay = new XAttribute("day", "31");
+                                }
+
+                                if (prevDay != null && prevDay.Value == "0")
+                                {
+                                    prevDay = new XAttribute("day", 1);
+                                }
+
+                                try
+                                {
+                                    if (prevYear != null && prevMonth != null && prevDay != null)
+                                    {
+                                        beginDate = DateTime.Parse($"{prevMonth.Value} {prevDay.Value.Trim(new char[] { '_', '*' })},{prevYear.Value}");
+                                    }
+                                    else if (prevYear != null && prevMonth != null)
+                                    {
+                                        beginDate = DateTime.Parse($"{prevMonth.Value} 1, {prevYear.Value}");
+                                    }
+                                    else if (prevYear != null)
+                                    {
+                                        beginDate = DateTime.Parse($"January 1, {prevYear.Value}");
+                                    }
+                                }
+                                catch(Exception e)
+                                {
+                                    //Rogue parsing situation! Log it for future fixes!
+                                    System.Diagnostics.Trace.WriteLine($"Invalid date: {closestPreviousDateElement} {shipID} {e.Message}");
+                                }
+                            }
+
+                            if (closestNextDateElement != null)
+                            {                               
+                                var nextYear = closestNextDateElement.Attribute("year");
+                                var nextMonth = closestNextDateElement.Attribute("month");
+                                var nextDay = closestNextDateElement.Attribute("day");
+
+                                if (nextMonth != null && nextMonth.Value == "November" &&
+                                    nextDay != null && Convert.ToInt32(nextDay.Value) > 30)
+                                {
+                                    nextDay = new XAttribute("day", "30");
+                                }
+
+                                if (nextMonth != null && nextMonth.Value == "February" &&
+                                   nextDay != null && Convert.ToInt32(nextDay.Value) > 28)
+                                {
+                                    nextDay = new XAttribute("day", "28");
+                                }
+
+                                if (nextMonth != null && nextMonth.Value == "June" &&
+                                 nextDay != null && Convert.ToInt32(nextDay.Value) > 30)
+                                {
+                                    nextDay = new XAttribute("day", "30");
+                                }
+
+                                if (nextMonth != null && nextMonth.Value == "April" &&
+                               nextDay != null && Convert.ToInt32(nextDay.Value) > 30)
+                                {
+                                    nextDay = new XAttribute("day", "30");
+                                }
+
+                                if (nextMonth != null && nextMonth.Value == "September" &&
+                               nextDay != null && Convert.ToInt32(nextDay.Value) > 30)
+                                {
+                                    nextDay = new XAttribute("day", "30");
+                                }
+
+                                if (nextMonth != null && nextMonth.Value == "May" &&
+                              nextDay != null && Convert.ToInt32(nextDay.Value) > 30)
+                                {
+                                    nextDay = new XAttribute("day", "30");
+                                }
 
 
+                                if (nextMonth != null && nextMonth.Value == "August" &&
+                               nextDay != null && Convert.ToInt32(nextDay.Value) > 31)
+                                {
+                                    nextDay = new XAttribute("day", "31");
+                                }
+
+                                if (nextDay != null && nextDay.Value == "0")
+                                {
+                                    nextDay = new XAttribute("day", 1);
+                                }
+
+                                try
+                                {
+                                    if (nextYear != null && nextMonth != null && nextDay != null)
+                                    {
+                                        endDate = DateTime.Parse($"{nextMonth.Value} {nextDay.Value.Trim(new char[] { '_' , '*'})},{nextYear.Value}");
+
+                                    }
+                                    else if (nextYear != null && nextMonth != null)
+                                    {
+                                        endDate = DateTime.Parse($"{nextMonth.Value} 1, {nextYear.Value}");
+                                    }
+                                    else if (nextYear != null)
+                                    {
+                                        endDate = DateTime.Parse($"January 1, {nextYear.Value}");
+                                    }
+                                }
+                                catch (Exception e)
+                                {
+                                    //Rogue parsing situation! Log it for future fixes!
+                                    System.Diagnostics.Trace.WriteLine($"Invalid date: {closestNextDateElement} {shipID} {e.Message}");
+                                }
+                            }
+
+                           
+                            {
+                                SQLiteCommand insertCommand = new SQLiteCommand("insert into shipLocationDate (shipID, locationname, startdate, enddate, locationguid) values (@shipID, @locationname, @startdate, @enddate, @locationguid)", locationConnection);
+                                insertCommand.Parameters.Add(new SQLiteParameter("@shipID", shipID));
+                                insertCommand.Parameters.Add(new SQLiteParameter("@locationname", location.Value));
+                                insertCommand.Parameters.Add(new SQLiteParameter("@startdate", beginDate == DateTime.MinValue ? string.Empty : beginDate.ToString()));
+                                insertCommand.Parameters.Add(new SQLiteParameter("@enddate", endDate == DateTime.MinValue ? string.Empty : endDate.ToString()));
+                                insertCommand.Parameters.Add(new SQLiteParameter("@locationguid", location.Attribute("location_guid").Value));
+
+                                insertCommand.ExecuteNonQuery();
+                            }
+
+                        }
+                        transaction.Commit();
+                    }
+
+                    shipCount++;
+                }
+
+
+                System.Diagnostics.Trace.WriteLine($"There are {uniqueLocations.Count} unique locations across {shipCount} ships", "INFO");
+
+
+                //Create a SQLite 3 DB table and put all the locations into it. Look them up using the Google Maps API, try to get Lat / Long.
+                //ONly allowed 2,500 per day, so get 2,500 and see what happens?
+
+                var uniqueLocationsFileName = System.IO.Path.Combine(ROOT_PATH, "UniqueLocations.txt");
+
+                System.IO.File.Delete(uniqueLocationsFileName);
+
+                //Save out the uniqueLocations to a file so we can do reverse geo location separately.
+                System.IO.File.AppendAllLines(uniqueLocationsFileName, uniqueLocations);
+                                
+                locationConnection.Close();
+            }
+        }
+
+        private async Task GeocodeUniqueLocations()
+        {
+            var uniqueLocationsFileName = System.IO.Path.Combine(ROOT_PATH, "UniqueLocations.txt");
 
             var geocoder = new GoogleGeocoder();
 
             int count = 0;
 
-            foreach (var location in uniqueLocations)
+            var uniqueLocations = System.IO.File.ReadAllLines(uniqueLocationsFileName);
+
+            using (var locationConnection = OpenExistingLocationDatabase(false))
             {
-                //Stop after 10 just for debugging purposes.
-                /*if (count >= 10)
-                    break;*/
 
-                //Wait 4 seconds between calls. Let's see how far we can get.
-                System.Threading.Thread.Sleep(4500);
+                foreach (var location in uniqueLocations)
+                {
+                    //Stop after 10 just for debugging purposes.
+                    /*if (count >= 10)
+                        break;*/
 
-                var shouldBeExcluded = this.invalidLocations.Any(o => string.Compare(o, location, true) == 0);
+                    await DoGeolocationLookup(geocoder, location, locationConnection);
+
+                    var splitByComma = location.Split(',');
+
+                    if (splitByComma.Length > 1)
+                    {
+                        foreach (var splitLocation in splitByComma)
+                        {
+                            await DoGeolocationLookup(geocoder, splitLocation.Trim(), locationConnection);
+                        }
+                    }
+
+                    count++;
+                }
+            }
+        }
+
+        int totalDates = 0;
+        string lastYear = string.Empty;
+
+        private async Task DoGeolocationLookup(GoogleGeocoder geocoder, string location, SQLiteConnection locationConnection)
+        {
+            var shouldBeExcluded = this.invalidLocations.Any(o => string.Compare(o, location, true) == 0);
+            if (!shouldBeExcluded)
+            {
+                //Now check the locationMarkers and skip those too.
+                shouldBeExcluded = this.locationMarkers.Keys.Any(o => string.Compare(o, location, true) == 0);
                 if (!shouldBeExcluded)
                 {
-                    //Now check the locationMarkers and skip those too.
-                    shouldBeExcluded = this.locationMarkers.Keys.Any(o => string.Compare(o, location, true) == 0);
+                    //Check to see if the location already exists, if it does, then skip the whole next step, do not attempt to geocode.
+                    using (SQLiteCommand sqlCommand = new SQLiteCommand("SELECT COUNT(*) from locationJSON where name = @name", locationConnection))
+                    {
+                        sqlCommand.Parameters.Add(new SQLiteParameter("@name", location));
+                        Int64 existingRecordCount = (Int64)sqlCommand.ExecuteScalar();
+                        if (existingRecordCount > 0)
+                        {
+                            shouldBeExcluded = true;
+                        }
+                    }
+
                     if (!shouldBeExcluded)
                     {
                         try
                         {
                             var geocoderResultRawJSON = await geocoder.DoGeocodeRawJSON(location);
 
-                            SQLiteCommand insertCommand = new SQLiteCommand("insert into locationJSON (name, geocodeJSON) values (@name, @geocodeJSON)", locationConnection);
-                            insertCommand.Parameters.Add(new SQLiteParameter("@name", location));
-                            insertCommand.Parameters.Add(new SQLiteParameter("@geocodeJSON", geocoderResultRawJSON));
+                            using (SQLiteCommand insertCommand = new SQLiteCommand("insert into locationJSON (name, geocodeJSON) values (@name, @geocodeJSON)", locationConnection))
+                            {
+                                insertCommand.Parameters.Add(new SQLiteParameter("@name", location));
+                                insertCommand.Parameters.Add(new SQLiteParameter("@geocodeJSON", geocoderResultRawJSON));
 
-                            insertCommand.ExecuteNonQuery();
+                                insertCommand.ExecuteNonQuery();
+
+
+                                System.Diagnostics.Trace.WriteLine($"Inserted new geocoding data for {location}");
+
+                                //Wait some time between geocoder calls. Let's see how far we can get against the Google geocoder.
+                                System.Threading.Thread.Sleep(4500);
+                            }
                         }
                         catch
                         {
-                            //The geocoder broke. Let's bail.
-                            break;
+                            //The geocoder broke. Let's log it but continue processing.
+                            System.Diagnostics.Trace.WriteLine($"Exception while Reverse Geocoding {location} - Continuing");
                         }
                     }
-
+                    else
+                    {
+                        System.Diagnostics.Trace.WriteLine($"Skipping Reverse Geolocation lookup for '{location}'");
+                    }
                 }
-                count++;
-            }
-            locationConnection.Close();
-        }
 
-        int totalDates = 0;
-        string lastYear = string.Empty;
+            }
+        }
 
         private void SetLastYear(string masterShipID, string year)
         {
