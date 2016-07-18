@@ -154,7 +154,7 @@ namespace DANFS.PreProcessor
             return $"{prevText}{element.Value}{nextText}";
         }
 
-        public void Process()
+        public async void Process()
         {
             
             System.Diagnostics.Trace.Listeners.Add(new PreProcessTracing(Path.Combine(ROOT_PATH, "DANFSPreProcessLog.txt")));
@@ -162,10 +162,10 @@ namespace DANFS.PreProcessor
             //DoNamedEntityRecognition(false);
             //return;
 
-            MakeLocationDictionary();
-            return;
+            //MakeLocationDictionary();
+            //return;
 
-            GeocodeUniqueLocations();
+            await GeocodeUniqueLocations();
             return;
 
             //TryGetRanksOfPeople();
@@ -969,12 +969,15 @@ namespace DANFS.PreProcessor
 
             using (var locationConnection = OpenExistingLocationDatabase(false))
             {
+                var totalUniqueLocations = uniqueLocations.Count();
 
                 foreach (var location in uniqueLocations)
                 {
                     //Stop after 10 just for debugging purposes.
                     /*if (count >= 10)
                         break;*/
+
+
 
                     await DoGeolocationLookup(geocoder, location, locationConnection);
 
@@ -989,6 +992,8 @@ namespace DANFS.PreProcessor
                     }
 
                     count++;
+
+                    System.Diagnostics.Trace.WriteLine($"Processed {count} of {totalUniqueLocations}");
                 }
             }
         }
@@ -1006,26 +1011,53 @@ namespace DANFS.PreProcessor
                 if (!shouldBeExcluded)
                 {
                     //Check to see if the location already exists, if it does, then skip the whole next step, do not attempt to geocode.
-                    using (SQLiteCommand sqlCommand = new SQLiteCommand("SELECT COUNT(*) from locationJSON where name = @name", locationConnection))
+                    using (SQLiteCommand sqlCommand = new SQLiteCommand("SELECT geocodeJSON from locationJSON where name = @name", locationConnection))
                     {
                         sqlCommand.Parameters.Add(new SQLiteParameter("@name", location));
-                        Int64 existingRecordCount = (Int64)sqlCommand.ExecuteScalar();
-                        if (existingRecordCount > 0)
+                        var reader = sqlCommand.ExecuteReader();
+                       
+                        while (reader.Read())
                         {
-                            shouldBeExcluded = true;
+                            var parsedJSON = geocoder.GetObjectFromJSON(reader["geocodeJSON"] as string);
+
+                            if (parsedJSON.Status == "OVER_QUERY_LIMIT" &&
+                                !string.IsNullOrEmpty(parsedJSON.ErrorMessage))
+                            {
+                                //Delete the entry from the table as well.
+                                using (var deleteCommand = new SQLiteCommand("delete from locationJSON where name = @name", locationConnection))
+                                {
+                                    deleteCommand.Parameters.Add(new SQLiteParameter("@name", location));
+                                    deleteCommand.ExecuteNonQuery();
+                                    System.Diagnostics.Trace.WriteLine($"Repairing {location} due to bad reverse geo code request");
+                                }
+
+                                shouldBeExcluded = false;
+                            }
+                            else
+                            {
+                                //Skip reverse geocoding this. It is all OK.
+                                shouldBeExcluded = true;
+                            }
                         }
+                        
                     }
 
                     if (!shouldBeExcluded)
                     {
                         try
                         {
-                            var geocoderResultRawJSON = await geocoder.DoGeocodeRawJSON(location);
+                            var geocoderResultTuple = await geocoder.DoGeocodeRawJSON(location);
+
+                            if (geocoderResultTuple.Item2.Status == "OVER_QUERY_LIMIT" &&
+                                !string.IsNullOrEmpty(geocoderResultTuple.Item2.ErrorMessage))
+                            {
+                                throw new Exception("Toasty on requests for the day! Sorry!");
+                            }
 
                             using (SQLiteCommand insertCommand = new SQLiteCommand("insert into locationJSON (name, geocodeJSON) values (@name, @geocodeJSON)", locationConnection))
                             {
                                 insertCommand.Parameters.Add(new SQLiteParameter("@name", location));
-                                insertCommand.Parameters.Add(new SQLiteParameter("@geocodeJSON", geocoderResultRawJSON));
+                                insertCommand.Parameters.Add(new SQLiteParameter("@geocodeJSON", geocoderResultTuple.Item1));
 
                                 insertCommand.ExecuteNonQuery();
 
@@ -1033,7 +1065,7 @@ namespace DANFS.PreProcessor
                                 System.Diagnostics.Trace.WriteLine($"Inserted new geocoding data for {location}");
 
                                 //Wait some time between geocoder calls. Let's see how far we can get against the Google geocoder.
-                                System.Threading.Thread.Sleep(4500);
+                                System.Threading.Thread.Sleep(500);
                             }
                         }
                         catch

@@ -13,10 +13,10 @@ namespace DANFS.PreProcessor
         public async Task<GeocodeResultMain> DoGecode(string address)
         {
             var rawJSON = await DoGeocodeRawJSON(address);
-            return Newtonsoft.Json.JsonConvert.DeserializeObject<GeocodeResultMain>(rawJSON);
+            return Newtonsoft.Json.JsonConvert.DeserializeObject<GeocodeResultMain>(rawJSON.Item1);
         }
 
-        public async Task<string> DoGeocodeRawJSON(string address)
+        public async Task<Tuple<string, GeocodeResultMain>> DoGeocodeRawJSON(string address)
         {
             var client = new HttpClient();
 
@@ -24,7 +24,16 @@ namespace DANFS.PreProcessor
 
             Uri uri = new Uri(uriString);
 
-           return await client.GetStringAsync(uri);           
+            var rawJSON = await client.GetStringAsync(uri);
+
+            var parsedJSON = Newtonsoft.Json.JsonConvert.DeserializeObject<GeocodeResultMain>(rawJSON);
+
+            return new Tuple<string, GeocodeResultMain>(rawJSON, parsedJSON);          
+        }
+
+        internal GeocodeResultMain GetObjectFromJSON(string rawJSON)
+        {
+            return Newtonsoft.Json.JsonConvert.DeserializeObject<GeocodeResultMain>(rawJSON);
         }
     }
 
@@ -36,6 +45,9 @@ namespace DANFS.PreProcessor
 
         [JsonProperty(PropertyName = "status")]
         public string Status { get; set; }
+
+        [JsonProperty(PropertyName = "error_message")]
+        public string ErrorMessage { get; set; }
     }
 
 
