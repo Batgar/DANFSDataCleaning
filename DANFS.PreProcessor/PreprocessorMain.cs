@@ -165,8 +165,8 @@ namespace DANFS.PreProcessor
             //MakeLocationDictionary();
             //return;
 
-            await GeocodeUniqueLocations();
-            return;
+            //await GeocodeUniqueLocations();
+            //return;
 
             //TryGetRanksOfPeople();
             //return;
@@ -278,9 +278,10 @@ namespace DANFS.PreProcessor
             var jarRoot = @"C:\Users\Dan Edgar\Downloads\stanford-ner-2015-12-09\stanford-ner-2015-12-09";
             var classifiersDirecrory = System.IO.Path.Combine(jarRoot, @"classifiers");
 
-            // Loading 3 class classifier model
-            classifier = CRFClassifier.getClassifierNoExceptions(
-                classifiersDirecrory + @"\english.all.3class.distsim.crf.ser.gz");
+            
+            classifier = CRFClassifier.getClassifierNoExceptions(Path.Combine(classifiersDirecrory,
+                 @"\english.all.3class.distsim.crf.ser.gz" // Loading 3 class classifier model
+            ));
 
             var pathToMainDANFSDatabase = System.IO.Path.Combine(ROOT_PATH, "danfs.sqlite3");
             var connection = new SQLiteConnection(string.Format("Data Source={0};Version=3", pathToMainDANFSDatabase));
@@ -1213,9 +1214,8 @@ namespace DANFS.PreProcessor
                 if (node is XText)
                 {
                     var textValue = (node as XText).Value;
-                    textValue = textValue.Replace("&", "&amp;").Replace(">", "&gt;").Replace("<", "&lt;");
-
-                    //var classifierResult = classifier.classifyWithInlineXML(textValue);                    
+                    textValue = textValue.Replace("&", "&amp;").Replace(">", "&gt;").Replace("<", "&lt;").Replace("Midway Island", "Midway").Replace("Midway", "Midway Island");
+                
 
                     var sentences = classifier.classify(textValue);
                     
@@ -1255,8 +1255,9 @@ namespace DANFS.PreProcessor
                         System.Diagnostics.Trace.WriteLine($"Removing POL: {invalidPOL.Parent}", "REPAIR");
 
                         //Add all child nodes of the invalid POL tag to the parent.
-                        invalidPOL.Parent.Add(invalidPOL.Nodes().ToArray());
-                                               
+                        invalidPOL.NodesBeforeSelf().Last().AddAfterSelf(invalidPOL.Nodes().ToArray());
+                        //Add it this way otherwise formatting issues occur within the <i> tags.
+
                         //Now safely remove the P,O,L tag with the contents safely copied.
                         invalidPOL.Remove();
                     }
