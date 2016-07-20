@@ -13,6 +13,7 @@ using Newtonsoft.Json;
 using edu.stanford.nlp.sequences;
 using edu.stanford.nlp.ling;
 using edu.stanford.nlp.process;
+using System.Xml.XPath;
 
 namespace DANFS.PreProcessor
 {
@@ -162,8 +163,8 @@ namespace DANFS.PreProcessor
             //DoNamedEntityRecognition(false);
             //return;
 
-            //MakeLocationDictionary();
-            //return;
+            MakeLocationDictionary();
+            return;
 
             //await GeocodeUniqueLocations();
             //return;
@@ -279,8 +280,9 @@ namespace DANFS.PreProcessor
             var classifiersDirecrory = System.IO.Path.Combine(jarRoot, @"classifiers");
 
             
-            classifier = CRFClassifier.getClassifierNoExceptions(Path.Combine(classifiersDirecrory,
-                 @"\english.all.3class.distsim.crf.ser.gz" // Loading 3 class classifier model
+            classifier = CRFClassifier.getClassifierNoExceptions(
+                Path.Combine(classifiersDirecrory,
+                    @"english.all.3class.distsim.crf.ser.gz" // Loading 3 class classifier model
             ));
 
             var pathToMainDANFSDatabase = System.IO.Path.Combine(ROOT_PATH, "danfs.sqlite3");
@@ -343,7 +345,9 @@ namespace DANFS.PreProcessor
 
                     var augmentedDoc = new XDocument();
                     augmentedDoc.Add(rootElement);
-                    augmentedDoc.Save(currentShipXMLFilePath);
+
+                    var currentShipXMLFilePathNER = System.IO.Path.Combine(ROOT_PATH, $@"ShipsNER\{reader["id"] as string}.xml");
+                    augmentedDoc.Save(currentShipXMLFilePathNER);
 
                     AddToAugmented(reader, augmentedDoc, augmentedConnection);
 
@@ -732,6 +736,178 @@ namespace DANFS.PreProcessor
             return locationConnection;
         }
 
+        XElement FindElementBefore(XElement elementToStartAt, string elementName)
+        {
+            //First check siblings.
+            var closestPreviousElement = elementToStartAt.ElementsBeforeSelf(elementName)?.LastOrDefault();
+            if (closestPreviousElement != null)
+            {
+                return closestPreviousElement;
+            }
+            else
+            {
+                //Check the parents siblings in reverse order.
+                foreach (var parentSibling in elementToStartAt.Parent.ElementsBeforeSelf().Reverse())
+                {
+                    var closestElement = parentSibling.Elements(elementName)?.LastOrDefault();
+                    if (closestElement != null)
+                    {
+                        //System.Diagnostics.Trace.WriteLine($"Found {elementName} element before in a previous paragraph");
+                        return closestElement;
+                    }
+                }
+            }
+            return null;            
+        }
+
+        XElement FindElementAfter(XElement elementToStartAt, string elementName)
+        {
+            //First check siblings.
+            var closestNextElement = elementToStartAt.ElementsAfterSelf(elementName)?.FirstOrDefault();
+            if (closestNextElement != null)
+            {
+                return closestNextElement;
+            }
+            else
+            {
+                //Check the parents siblings in reverse order.
+                foreach (var parentSibling in elementToStartAt.Parent.ElementsAfterSelf())
+                {
+                    var closestElement = parentSibling.Elements(elementName)?.FirstOrDefault();
+                    if (closestElement != null)
+                    {
+                        
+                        return closestElement;
+                    }
+                }
+            }
+            return null;
+        }
+
+        DateTime GetSeasonalDateTimeFromElement(XElement seasonalDateElement, string shipID)
+        {
+            var season = seasonalDateElement.Attribute("season").Value.ToLowerInvariant();
+            var year = seasonalDateElement.Attribute("year")?.Value;
+            if (string.IsNullOrEmpty(year))
+            {
+                System.Diagnostics.Trace.WriteLine($"INVALID SEASON YEAR: {season} {seasonalDateElement} {shipID}");
+                return DateTime.MinValue;
+            }
+
+            switch (season)
+            {
+                case "fall":
+                    return DateTime.Parse($"December 20, {year}");
+                case "winter":
+                    return DateTime.Parse($"March 19, {year}");
+                case "spring":
+                    return DateTime.Parse($"June 21, {year}");
+                case "summer":
+                    return DateTime.Parse($"September 21, {year}");
+                default:
+                    System.Diagnostics.Trace.WriteLine($"INVALID SEASON: {season} {seasonalDateElement} {shipID}");
+                    return DateTime.MinValue;
+            }
+        }
+        
+        DateTime GetDateTimeFromElement(XElement closestPreviousDateElement, string shipID, bool isNextDate)
+        {
+
+            if (closestPreviousDateElement.Attribute("season") != null)
+            {
+                return GetSeasonalDateTimeFromElement(closestPreviousDateElement, shipID);
+            }
+
+            //We have a location, a ship ID, and possible associated dates.
+            //Log the location Guid, doc id, location name, before date, end date, 
+            var prevYear = closestPreviousDateElement.Attribute("year");
+            var prevMonth = closestPreviousDateElement.Attribute("month");
+            var prevDay = closestPreviousDateElement.Attribute("day");
+
+            if (prevMonth != null && prevMonth.Value == "November" &&
+               prevDay != null && Convert.ToInt32(prevDay.Value) > 30)
+            {
+                prevDay = new XAttribute("day", "30");
+            }
+
+            if (prevMonth != null && prevMonth.Value == "February" &&
+              prevDay != null && Convert.ToInt32(prevDay.Value) > 28)
+            {
+                prevDay = new XAttribute("day", "28");
+            }
+
+            if (prevMonth != null && prevMonth.Value == "June" &&
+              prevDay != null && Convert.ToInt32(prevDay.Value) > 30)
+            {
+                prevDay = new XAttribute("day", "30");
+            }
+
+
+            if (prevMonth != null && prevMonth.Value == "April" &&
+              prevDay != null && Convert.ToInt32(prevDay.Value) > 30)
+            {
+                prevDay = new XAttribute("day", "30");
+            }
+
+            if (prevMonth != null && prevMonth.Value == "September" &&
+            prevDay != null && Convert.ToInt32(prevDay.Value) > 30)
+            {
+                prevDay = new XAttribute("day", "30");
+            }
+
+            if (prevMonth != null && prevMonth.Value == "May" &&
+          prevDay != null && Convert.ToInt32(prevDay.Value) > 30)
+            {
+                prevDay = new XAttribute("day", "30");
+            }
+
+            if (prevMonth != null && prevMonth.Value == "August" &&
+          prevDay != null && Convert.ToInt32(prevDay.Value) > 31)
+            {
+                prevDay = new XAttribute("day", "31");
+            }
+
+            if (prevDay != null && prevDay.Value == "0")
+            {
+                prevDay = new XAttribute("day", 1);
+            }
+
+            try
+            {
+                DateTime beginDate = DateTime.MinValue;
+
+                if (prevYear != null && prevMonth != null && prevDay != null)
+                {
+                    beginDate = DateTime.Parse($"{prevMonth.Value} {prevDay.Value.Trim(new char[] { '_', '*' })},{prevYear.Value}");
+                }
+                else if (prevYear != null && prevMonth != null)
+                {
+                    beginDate = DateTime.Parse($"{prevMonth.Value} 1, {prevYear.Value}");
+                }
+                else if (prevYear != null)
+                {
+                    if (isNextDate)
+                    {
+                        beginDate = DateTime.Parse($"December 31, {prevYear.Value}");
+                    }
+                    else
+                    {
+                        beginDate = DateTime.Parse($"January 1, {prevYear.Value}");
+                    }
+               }
+
+                return beginDate;
+            }
+            catch (Exception e)
+            {
+                //Rogue parsing situation! Log it for future fixes!
+                System.Diagnostics.Trace.WriteLine($"Invalid date: {closestPreviousDateElement} {shipID} {e.Message}");
+            }
+
+            return DateTime.MinValue;
+        }
+        
+
         private async void MakeLocationDictionary()
         {
 
@@ -743,7 +919,7 @@ namespace DANFS.PreProcessor
                 int shipCount = 0;
 
                 //Now we will produce a location dictionary from all locations, and dump the JSON.
-                foreach (var file in Directory.GetFiles(System.IO.Path.Combine(ROOT_PATH, @"Ships"), "*.xml"))
+                foreach (var file in Directory.GetFiles(System.IO.Path.Combine(ROOT_PATH, @"ShipsNER"), "*.xml"))
                 {
                     var doc = XDocument.Load(file);
 
@@ -760,167 +936,51 @@ namespace DANFS.PreProcessor
 
                         foreach (var location in doc.Root.Descendants("LOCATION"))
                         {
-                            var closestPreviousDateElement = location.ElementsBeforeSelf("date")?.LastOrDefault();
-                            var closestNextDateElement = location.ElementsAfterSelf("date")?.FirstOrDefault();
+                            var closestPreviousDateElement = FindElementBefore(location, "date"); // location.ElementsBeforeSelf("date")?.LastOrDefault();
+                            var closestNextDateElement = FindElementAfter(location, "date"); //location.ElementsAfterSelf("date")?.FirstOrDefault();
+
+                            if (closestNextDateElement == null && 
+                                closestPreviousDateElement == null)
+                            {
+                                System.Diagnostics.Trace.WriteLine($"No next date and prev date for location {shipID} - {location.Value} - {location.Attribute("location_guid").Value}");
+                            }
+                            else if (closestNextDateElement == null)
+                            {
+                                System.Diagnostics.Trace.WriteLine($"No next date location {shipID} - {location.Value} - {location.Attribute("location_guid").Value}");
+                            }
+                            else if (closestPreviousDateElement == null)
+                            {
+                                System.Diagnostics.Trace.WriteLine($"No prev date location {shipID} - {location.Value} - {location.Attribute("location_guid").Value}");
+                            }
+
 
                             DateTime beginDate = DateTime.MinValue;
                             DateTime endDate = DateTime.MinValue;
 
                             if (closestPreviousDateElement != null)
                             {
-                                //We have a location, a ship ID, and possible associated dates.
-                                //Log the location Guid, doc id, location name, before date, end date, 
-                                var prevYear = closestPreviousDateElement.Attribute("year");
-                                var prevMonth = closestPreviousDateElement.Attribute("month");
-                                var prevDay = closestPreviousDateElement.Attribute("day");
-
-                                if (prevMonth != null && prevMonth.Value == "November" &&
-                                   prevDay != null && Convert.ToInt32(prevDay.Value) > 30)
-                                {
-                                    prevDay = new XAttribute("day", "30");
-                                }
-
-                                if (prevMonth != null && prevMonth.Value == "February" &&
-                                  prevDay != null && Convert.ToInt32(prevDay.Value) > 28)
-                                {
-                                    prevDay = new XAttribute("day", "28");
-                                }
-
-                                if (prevMonth != null && prevMonth.Value == "June" &&
-                                  prevDay != null && Convert.ToInt32(prevDay.Value) > 30)
-                                {
-                                    prevDay = new XAttribute("day", "30");
-                                }
-
-
-                                if (prevMonth != null && prevMonth.Value == "April" &&
-                                  prevDay != null && Convert.ToInt32(prevDay.Value) > 30)
-                                {
-                                    prevDay = new XAttribute("day", "30");
-                                }
-
-                                if (prevMonth != null && prevMonth.Value == "September" &&
-                                prevDay != null && Convert.ToInt32(prevDay.Value) > 30)
-                                {
-                                    prevDay = new XAttribute("day", "30");
-                                }
-
-                                if (prevMonth != null && prevMonth.Value == "May" &&
-                              prevDay != null && Convert.ToInt32(prevDay.Value) > 30)
-                                {
-                                    prevDay = new XAttribute("day", "30");
-                                }
-
-                                if (prevMonth != null && prevMonth.Value == "August" &&
-                              prevDay != null && Convert.ToInt32(prevDay.Value) > 31)
-                                {
-                                    prevDay = new XAttribute("day", "31");
-                                }
-
-                                if (prevDay != null && prevDay.Value == "0")
-                                {
-                                    prevDay = new XAttribute("day", 1);
-                                }
-
-                                try
-                                {
-                                    if (prevYear != null && prevMonth != null && prevDay != null)
-                                    {
-                                        beginDate = DateTime.Parse($"{prevMonth.Value} {prevDay.Value.Trim(new char[] { '_', '*' })},{prevYear.Value}");
-                                    }
-                                    else if (prevYear != null && prevMonth != null)
-                                    {
-                                        beginDate = DateTime.Parse($"{prevMonth.Value} 1, {prevYear.Value}");
-                                    }
-                                    else if (prevYear != null)
-                                    {
-                                        beginDate = DateTime.Parse($"January 1, {prevYear.Value}");
-                                    }
-                                }
-                                catch(Exception e)
-                                {
-                                    //Rogue parsing situation! Log it for future fixes!
-                                    System.Diagnostics.Trace.WriteLine($"Invalid date: {closestPreviousDateElement} {shipID} {e.Message}");
-                                }
+                                beginDate = GetDateTimeFromElement(closestPreviousDateElement, shipID, false);
                             }
 
                             if (closestNextDateElement != null)
-                            {                               
-                                var nextYear = closestNextDateElement.Attribute("year");
-                                var nextMonth = closestNextDateElement.Attribute("month");
-                                var nextDay = closestNextDateElement.Attribute("day");
-
-                                if (nextMonth != null && nextMonth.Value == "November" &&
-                                    nextDay != null && Convert.ToInt32(nextDay.Value) > 30)
-                                {
-                                    nextDay = new XAttribute("day", "30");
-                                }
-
-                                if (nextMonth != null && nextMonth.Value == "February" &&
-                                   nextDay != null && Convert.ToInt32(nextDay.Value) > 28)
-                                {
-                                    nextDay = new XAttribute("day", "28");
-                                }
-
-                                if (nextMonth != null && nextMonth.Value == "June" &&
-                                 nextDay != null && Convert.ToInt32(nextDay.Value) > 30)
-                                {
-                                    nextDay = new XAttribute("day", "30");
-                                }
-
-                                if (nextMonth != null && nextMonth.Value == "April" &&
-                               nextDay != null && Convert.ToInt32(nextDay.Value) > 30)
-                                {
-                                    nextDay = new XAttribute("day", "30");
-                                }
-
-                                if (nextMonth != null && nextMonth.Value == "September" &&
-                               nextDay != null && Convert.ToInt32(nextDay.Value) > 30)
-                                {
-                                    nextDay = new XAttribute("day", "30");
-                                }
-
-                                if (nextMonth != null && nextMonth.Value == "May" &&
-                              nextDay != null && Convert.ToInt32(nextDay.Value) > 30)
-                                {
-                                    nextDay = new XAttribute("day", "30");
-                                }
-
-
-                                if (nextMonth != null && nextMonth.Value == "August" &&
-                               nextDay != null && Convert.ToInt32(nextDay.Value) > 31)
-                                {
-                                    nextDay = new XAttribute("day", "31");
-                                }
-
-                                if (nextDay != null && nextDay.Value == "0")
-                                {
-                                    nextDay = new XAttribute("day", 1);
-                                }
-
-                                try
-                                {
-                                    if (nextYear != null && nextMonth != null && nextDay != null)
-                                    {
-                                        endDate = DateTime.Parse($"{nextMonth.Value} {nextDay.Value.Trim(new char[] { '_' , '*'})},{nextYear.Value}");
-
-                                    }
-                                    else if (nextYear != null && nextMonth != null)
-                                    {
-                                        endDate = DateTime.Parse($"{nextMonth.Value} 1, {nextYear.Value}");
-                                    }
-                                    else if (nextYear != null)
-                                    {
-                                        endDate = DateTime.Parse($"January 1, {nextYear.Value}");
-                                    }
-                                }
-                                catch (Exception e)
-                                {
-                                    //Rogue parsing situation! Log it for future fixes!
-                                    System.Diagnostics.Trace.WriteLine($"Invalid date: {closestNextDateElement} {shipID} {e.Message}");
-                                }
+                            {
+                                endDate = GetDateTimeFromElement(closestNextDateElement, shipID, true);                                
                             }
 
+                            if (beginDate != DateTime.MinValue && endDate != DateTime.MinValue)
+                            {
+                                //System.Diagnostics.Trace.WriteLine($"{beginDate} - {endDate} for {location.Value} in {shipID}");
+                                var compareResult = DateTime.Compare(beginDate, endDate);
+
+                                if (compareResult > 0)
+                                {
+                                    System.Diagnostics.Trace.WriteLine($"POSSIBLE DATE ERROR - { beginDate} may be greater than { endDate}   {shipID} - {location.Value} - {location.Attribute("location_guid").Value}");
+                                }
+                                else if (compareResult == 0)
+                                {
+                                    System.Diagnostics.Trace.WriteLine($"POSSIBLE DATE ERROR - { beginDate} is equal to { endDate}   {shipID} - {location.Value} - {location.Attribute("location_guid").Value}");
+                                }
+                            }
                            
                             {
                                 SQLiteCommand insertCommand = new SQLiteCommand("insert into shipLocationDate (shipID, locationname, startdate, enddate, locationguid) values (@shipID, @locationname, @startdate, @enddate, @locationguid)", locationConnection);
@@ -1214,8 +1274,13 @@ namespace DANFS.PreProcessor
                 if (node is XText)
                 {
                     var textValue = (node as XText).Value;
-                    textValue = textValue.Replace("&", "&amp;").Replace(">", "&gt;").Replace("<", "&lt;").Replace("Midway Island", "Midway").Replace("Midway", "Midway Island");
+                    textValue = textValue.Replace("&", "&amp;").Replace(">", "&gt;").Replace("<", "&lt;");
                 
+                    //raby has a Midway, Ga. in it which we want to preserve.
+                    if (!masterShipID.StartsWith("raby"))
+                    {
+                        textValue = textValue.Replace("Midway Island", "Midway").Replace("Midway", "Midway Island");
+                    }
 
                     var sentences = classifier.classify(textValue);
                     
@@ -1255,7 +1320,20 @@ namespace DANFS.PreProcessor
                         System.Diagnostics.Trace.WriteLine($"Removing POL: {invalidPOL.Parent}", "REPAIR");
 
                         //Add all child nodes of the invalid POL tag to the parent.
-                        invalidPOL.NodesBeforeSelf().Last().AddAfterSelf(invalidPOL.Nodes().ToArray());
+                        var afterNode = invalidPOL.NodesAfterSelf().FirstOrDefault();
+                        var beforeNode = invalidPOL.NodesBeforeSelf().LastOrDefault();
+                        if (afterNode != null/* && beforeNode != null*/)
+                        {
+                            afterNode.AddBeforeSelf(invalidPOL.Nodes().ToArray());
+                        }
+                        else if (beforeNode != null)
+                        {
+                            beforeNode.AddAfterSelf(invalidPOL.Nodes().ToArray());
+                        }
+                        else
+                        {
+                            invalidPOL.Parent.Add(invalidPOL.Nodes().ToArray());
+                        }
                         //Add it this way otherwise formatting issues occur within the <i> tags.
 
                         //Now safely remove the P,O,L tag with the contents safely copied.
