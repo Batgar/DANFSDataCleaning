@@ -163,8 +163,8 @@ namespace DANFS.PreProcessor
             //DoNamedEntityRecognition(false);
             //return;
 
-            MakeLocationDictionary();
-            return;
+            //MakeLocationDictionary();
+            //return;
 
             //await GeocodeUniqueLocations();
             //return;
@@ -183,6 +183,8 @@ namespace DANFS.PreProcessor
             int totalShipCount = 0;
             int missingShipRegistries = 0;
             totalDates = 0;
+
+            int shipHistoryDividerCount = 0;
 
           
 
@@ -227,7 +229,19 @@ namespace DANFS.PreProcessor
 
                         noYearDateElements.Clear();
 
-                        ProcessElement(reader["id"] as String, doc.Root, rootElement);
+                        var context = new ProcessElementContext();
+                        context.Title = reader["title"] as String;
+
+                        ProcessElement(reader["id"] as String, doc.Root, rootElement, context);
+
+                        if (!context.FirstAlternateShipHistoryDiscovered)
+                        {
+                            System.Diagnostics.Trace.WriteLine($"ALTERNATE SHIP HISTORY DIVIDER NOT FOUND FOR {reader["id"]}");
+                        }
+                        else
+                        {
+                            shipHistoryDividerCount++;
+                        }
 
                         var augmentedDoc = new XDocument();
                         augmentedDoc.Add(rootElement);
@@ -268,7 +282,7 @@ namespace DANFS.PreProcessor
 
             DoNamedEntityRecognition(true);   
 
-            System.Diagnostics.Trace.WriteLine($"Total Ships: {totalShipCount} -- Missing Registries: {missingShipRegistries} - Total Dates Logged: {totalDates}", "INFO");
+            System.Diagnostics.Trace.WriteLine($"Total Ships: {totalShipCount} -- Missing Registries: {missingShipRegistries} - Total Dates Logged: {totalDates} - Total ship history dividers found: {shipHistoryDividerCount}", "INFO");
 
         }
 
@@ -1451,7 +1465,13 @@ namespace DANFS.PreProcessor
             }
         }
 
-        void ProcessElement(string masterShipID, XElement element, XElement destinationElement)
+        class ProcessElementContext
+        {
+            public bool FirstAlternateShipHistoryDiscovered { get; set; }
+            public string Title { get; internal set; }
+        }
+
+        void ProcessElement(string masterShipID, XElement element, XElement destinationElement, ProcessElementContext context)
         {
             
 
@@ -1466,6 +1486,8 @@ namespace DANFS.PreProcessor
                 else if (node is XElement)
                 {
                     var sourceElement = (node as XElement);
+
+                    //Copy all the attributes from the existing element.
                     XElement newDestinationElement = new XElement(sourceElement.Name);
                     foreach (var attribute in sourceElement.Attributes())
                     {
@@ -1485,6 +1507,9 @@ namespace DANFS.PreProcessor
                         {
                             newDestinationElement.Add(new XAttribute("possible-history-start", "true"));
                             newDestinationElement.Add(new XAttribute("ship-registry", "normalized"));
+
+                            AddMarkupShipMetrics(masterShipID, sourceElement, newDestinationElement);
+
                             shipRegistryElement = newDestinationElement;
                         }
                         else
@@ -1494,16 +1519,153 @@ namespace DANFS.PreProcessor
                             {
                                 newDestinationElement.Add(new XAttribute("possible-history-start", "true"));
                                 newDestinationElement.Add(new XAttribute("ship-registry", "notnormalized"));
+
+                                AddMarkupShipMetrics(masterShipID, sourceElement, newDestinationElement);
+
                                 shipRegistryElement = newDestinationElement;
+                               
                             }
                         }
                         
                     }
 
+                    if (!context.FirstAlternateShipHistoryDiscovered)
+                    {
+                        AlternateMarkIfShipHistoryBegin(sourceElement, newDestinationElement, context);
+                    }
+
+
                     destinationElement.Add(newDestinationElement);
-                    ProcessElement(masterShipID, node as XElement, newDestinationElement);
+                    ProcessElement(masterShipID, node as XElement, newDestinationElement, context);
                 }
             }
+        }
+
+        private void AddMarkupShipMetrics(string masterShipID, XElement sourceElement, XElement newDestinationElement)
+        {
+            //Samples: 
+            /*
+             (DDG-1000: displacement 14,564; length 610'; beam 80.7'; draft 28'; speed 30 knots; complement 148; armament 20 Mk 57 Vertical Launch System modules (80 cells) for RIM-162 Evolved Sea Sparrow Missiles, BGM-109E Tactical <i>Tomahawk</i>s, and <ORGANIZATION PROBABILITY="0.486440705968583">RUM-139C Anti-Submarine Rockets</ORGANIZATION>, two 155 millimeter Advanced Gun Systems, two Mk 46 30 millimeter <ORGANIZATION PROBABILITY="0.709120851876277">Naval Weapon Systems</ORGANIZATION>, and two Sikorsky MH-60R <i>Seahawk</i> helicopters or one <i>Seahawk</i> and up to three <ORGANIZATION PROBABILITY="0.981090465287876">Northrop Grumman</ORGANIZATION> RQ-8A <i>Fire Scout</i> Vertical Takeoff and Landing Tactical Unmanned Aerial Vehicles; class <i>Zumwalt</i>)
+            (AT-95: displacement 1,589 (trial); length 205'0"; beam 38'6"; draft 15'4" (full load); speed 16.5 knots (trial); complement 85; armament 1 3-inch, 2 40 millimeter; class <i>Navajo</i>)
+             */
+
+            var dataElement = sourceElement.Element("p");
+
+            if (dataElement == null)
+            {
+                dataElement = sourceElement;
+            }
+
+            var rawText = dataElement.Value;
+
+            var shipMetricsElement = new XElement("shipmetrics");
+
+            var rawSplit = rawText.Split(';');
+            
+            foreach (var rawValue in rawSplit)
+            {
+                var metricElement = new XElement("metric");
+
+                var trimmedRawValue = rawValue.Trim();
+
+                string shipValueKey = string.Empty;
+                string shipValue = string.Empty;
+
+                var spaceSeparatedValues = trimmedRawValue.Split(' ');
+                if (rawValue.StartsWith("("))
+                {                   
+                    //Then we need to look after the : for the ship key.               
+                    int counter = 0;
+                    int indexOfColon = int.MinValue;
+                    foreach (var possibleValue in spaceSeparatedValues)
+                    {
+                        if (possibleValue.EndsWith(":"))
+                        {
+                            indexOfColon = counter;
+                            break;
+                        }
+                        counter++;
+                    }
+
+                    if (indexOfColon != int.MinValue)
+                    {
+                        if (spaceSeparatedValues.Length >= indexOfColon + 2)
+                        {
+                            shipValueKey = spaceSeparatedValues.Skip(indexOfColon + 1).First();
+                            shipValue = string.Join(" ", spaceSeparatedValues.Skip(indexOfColon + 2).ToArray());
+                            System.Diagnostics.Trace.WriteLine($"{masterShipID} - Ship Metrics: {shipValueKey} = {shipValue}");
+                        }
+                        else
+                        {
+                            System.Diagnostics.Trace.WriteLine($"{masterShipID} -Not sure we are processing ship metric data");
+                            shipValue = "UNKNOWN";
+                            shipValueKey = "UNKNOWN";
+                        }
+                    }
+                    else
+                    {
+                        System.Diagnostics.Trace.WriteLine($"{masterShipID} -First entry in ship data has nothing that ends with a colon");
+                        shipValue = "UNKNOWN";
+                        shipValueKey = "UNKNOWN";
+                    }
+                }
+                else
+                {
+                    shipValueKey = spaceSeparatedValues[0];
+                    shipValue = string.Join(" ", spaceSeparatedValues.Skip(1).ToArray());
+                }
+
+                var valueKeyElement = new XElement("key");
+                valueKeyElement.Value = shipValueKey;
+
+                var valueElement = new XElement("value");
+                valueElement.Value = shipValue;
+
+                metricElement.Add(valueKeyElement);
+                metricElement.Add(valueElement);
+
+                shipMetricsElement.Add(metricElement);
+            }
+
+            newDestinationElement.Add(shipMetricsElement);
+        }
+
+        private bool AlternateMarkIfShipHistoryBegin(XElement sourceElement, XElement newDestinationElement, ProcessElementContext context)
+        {
+            if (sourceElement.Name == "p" && !context.FirstAlternateShipHistoryDiscovered)
+            {
+                var paragraphText = sourceElement.Value.ToLowerInvariant();
+             
+                if (sourceElement.Value.ToLowerInvariant().Contains("cl."))
+                {
+                    //This is the top ship registry text, we don't want to scan this to see if it is the history begin.
+                    return false;
+                }
+            
+                var iElements = sourceElement.Descendants("i");
+                foreach (var iElement in iElements)
+                {
+                    var splitName = context.Title.Split(' ');
+                    var stringToFind = splitName[0].ToLowerInvariant().Trim();
+                    if (iElement != null && iElement.Value.ToLowerInvariant().Contains(stringToFind))
+                    {
+                        newDestinationElement.Add(new XAttribute("possible_start_ship_log", "true"));
+                        context.FirstAlternateShipHistoryDiscovered = true;
+                        return true;
+                    }
+                }
+                
+                {
+                    if (paragraphText.Contains("was laid down"))
+                    {
+                        newDestinationElement.Add(new XAttribute("possible_start_ship_log", "true"));
+                        context.FirstAlternateShipHistoryDiscovered = true;
+                        return true;
+                    }
+                }
+            }
+
+            return false;
         }
 
         private void DoTextDateProcessing(string masterShipID, XElement destinationElement, XNode node, string textValue)
